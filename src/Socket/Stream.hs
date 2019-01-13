@@ -22,6 +22,7 @@ newtype Listener = Listener Fd
 newtype Connection = Connection Fd
 
 listener :: IO Listener
+
 withListener :: (Listener -> IO a) -> IO a
 withListener = bracket listener unsubcribe
 
@@ -73,7 +74,9 @@ internalAcceptConnection :: Listener -> IO (Address,Connection)
 internalAcceptConnection _ = fail "write unsafeAcceptConnection"
 
 connect :: Address -> IO Connection
+
 withConnection :: (Connection -> IO a) -> IO a
+withConnection = bracket connect disconnect
 
 send :: Connection -> ByteArray -> IO ()
 receive :: Connection -> IO (Maybe ByteArray)
