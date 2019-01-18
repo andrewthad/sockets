@@ -27,6 +27,7 @@ tests = testGroup "socket"
     [ testGroup "ipv4"
       [ testGroup "undestined"
         [ testCase "A" testDatagramUndestinedA
+        , testCase "B" testDatagramUndestinedB
         ]
       ]
     ]
@@ -44,7 +45,7 @@ testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   (port,received) <- concurrently (sender m) (receiver m)
-  received @=? (DIU.Endpoint IPv4.loopback port, message)
+  received @=? DIU.Message (DIU.Endpoint IPv4.loopback port) message
   where
   message = E.fromList [0,1,2,3] :: ByteArray
   sz = PM.sizeofByteArray message
@@ -53,10 +54,41 @@ testDatagramUndestinedA = do
     dstPort <- PM.takeMVar m
     unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message 0 sz
     pure srcPort
-  receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Endpoint,ByteArray)
+  receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
   receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     unhandled $ DIU.receive sock sz
+
+testDatagramUndestinedB :: Assertion
+testDatagramUndestinedB = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
+  (port,received) <- concurrently (sender m n) (receiver m n)
+  received @=?
+    ( DIU.Message (DIU.Endpoint IPv4.loopback port) message1
+    , DIU.Message (DIU.Endpoint IPv4.loopback port) message2
+    )
+  where
+  message1 = E.fromList [0,1,2,3] :: ByteArray
+  message2 = E.fromList [4,5,6,8,9,10] :: ByteArray
+  sz1 = PM.sizeofByteArray message1
+  sz2 = PM.sizeofByteArray message2
+  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
+  sender m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message1 0 sz1
+    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message2 0 sz2
+    PM.putMVar n ()
+    pure srcPort
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message)
+  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    PM.takeMVar n
+    msgs <- unhandled $ DIU.receiveMany sock 3 (max sz1 sz2)
+    if PM.sizeofArray msgs == 2
+      then pure (PM.indexArray msgs 0, PM.indexArray msgs 1)
+      else fail "received a number of messages other than 2"
+      
 
 -- This test involves a made up protocol that goes like this:
 -- The sender always starts by sending the length of the rest

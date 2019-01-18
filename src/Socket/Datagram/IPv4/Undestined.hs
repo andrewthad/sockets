@@ -10,12 +10,14 @@ module Socket.Datagram.IPv4.Undestined
   ( -- * Types
     Socket(..)
   , Endpoint(..)
+  , Message(..)
     -- * Establish
   , withSocket
     -- * Communicate
   , send
   , receive
   , receiveMutableByteArraySlice_
+  , receiveMany
     -- * Exceptions
   , SocketException(..)
   , Context(..)
@@ -26,7 +28,7 @@ module Socket.Datagram.IPv4.Undestined
 
 import Control.Concurrent (threadWaitWrite,threadWaitRead)
 import Control.Exception (mask,onException)
-import Data.Primitive (ByteArray,MutableByteArray(..))
+import Data.Primitive (ByteArray,MutableByteArray(..),Array)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
 import Foreign.C.Types (CInt,CSize)
@@ -45,7 +47,12 @@ import qualified Posix.Socket as S
 -- | A connectionless datagram socket that may communicate with many different
 -- endpoints on a datagram-by-datagram basis.
 newtype Socket = Socket Fd
-  deriving (Eq,Ord)
+  deriving (Eq,Ord,Show)
+
+data Message = Message
+  { remote :: {-# UNPACK #-} !Endpoint
+  , payload :: !ByteArray
+  } deriving (Eq,Show)
 
 -- | Open a socket and run the supplied callback on it. This closes the socket
 -- when the callback finishes or when an exception is thrown. Do not return 
@@ -111,24 +118,24 @@ send ::
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
   -> IO (Either SocketException ())
-send (Socket !s) !remote !payload !off !len = do
-  debug ("send: about to send to " ++ show remote)
-  e1 <- S.uninterruptibleSendToByteArray s payload
+send (Socket !s) !theRemote !thePayload !off !len = do
+  debug ("send: about to send to " ++ show theRemote)
+  e1 <- S.uninterruptibleSendToByteArray s thePayload
     (intToCInt off)
     (intToCSize len)
     mempty
-    (S.encodeSocketAddressInternet (endpointToSocketAddressInternet remote))
-  debug ("send: just sent to " ++ show remote)
+    (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
+  debug ("send: just sent to " ++ show theRemote)
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        debug ("send: waiting to for write ready to send to " ++ show remote)
+        debug ("send: waiting to for write ready to send to " ++ show theRemote)
         threadWaitWrite s
-        e2 <- S.uninterruptibleSendToByteArray s payload
+        e2 <- S.uninterruptibleSendToByteArray s thePayload
           (intToCInt off)
           (intToCSize len)
           mempty
-          (S.encodeSocketAddressInternet (endpointToSocketAddressInternet remote))
+          (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
         case e2 of
           Left err2 -> do
             debug ("send: encountered error after sending")
@@ -147,7 +154,7 @@ send (Socket !s) !remote !payload !off !len = do
 receive ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum size of datagram to receive
-  -> IO (Either SocketException (Endpoint,ByteArray))
+  -> IO (Either SocketException Message)
 receive (Socket !fd) !maxSz = do
   debug "receive: about to wait"
   threadWaitRead fd
@@ -168,13 +175,65 @@ receive (Socket !fd) !maxSz = do
           Just sockAddrInet -> do
             shrinkMutableByteArray marr (csizeToInt recvSz)
             arr <- PM.unsafeFreezeByteArray marr
-            pure $ Right
-              ( socketAddressInternetToEndpoint sockAddrInet
-              , arr
-              )
+            pure $ Right (Message (socketAddressInternetToEndpoint sockAddrInet) arr)
           Nothing -> pure (Left (exception Receive SocketAddressFamily))
         else pure (Left (exception Receive SocketAddressSize))
       else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+
+-- | Receive up to the specified number of datagrams into freshly allocated
+--   byte arrays. When there are many datagrams present on the receive
+--   buffer, this is more efficient than calling 'receive' repeatedly.
+receiveMany ::
+     Socket -- ^ Socket
+  -> Int -- ^ Maximum number of datagrams to receive
+  -> Int -- ^ Maximum size of each datagram to receive
+  -> IO (Either SocketException (Array Message))
+receiveMany = receiveManyShim
+
+-- Although this is a shim for recvmmsg, it is still better than calling
+-- receive repeatedly since it avoids unneeded calls to the event
+-- manager. This is guaranteed to return at least one message.
+receiveManyShim :: Socket -> Int -> Int -> IO (Either SocketException (Array Message))
+receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
+  debug "receiveMany: about to wait"
+  threadWaitRead fd
+  debug "receiveMany: socket is now readable"
+  msgs <- PM.newArray maxDatagrams errorThunk
+  -- We use MSG_TRUNC so that we are able to figure out whether
+  -- or not bytes were discarded. If bytes were discarded
+  -- (meaning that the buffer was too small), we return an
+  -- exception.
+  let go !ix = if ix < maxDatagrams
+        then do
+          marr <- PM.newByteArray maxSz
+          e <- S.uninterruptibleReceiveFromMutableByteArray fd marr 0
+            (intToCSize maxSz) (L.truncate) S.sizeofSocketAddressInternet
+          case e of
+            Left err -> if err == eWOULDBLOCK || err == eAGAIN
+              then do
+                r <- PM.freezeArray msgs 0 ix
+                pure (Right r)
+              else pure (Left (errorCode Receive err))
+            Right (sockAddrRequiredSz,sockAddr,recvSz) -> if csizeToInt recvSz <= maxSz
+              then if sockAddrRequiredSz == S.sizeofSocketAddressInternet
+                then case S.decodeSocketAddressInternet sockAddr of
+                  Just sockAddrInet -> do
+                    shrinkMutableByteArray marr (csizeToInt recvSz)
+                    arr <- PM.unsafeFreezeByteArray marr
+                    let !msg = Message (socketAddressInternetToEndpoint sockAddrInet) arr
+                    PM.writeArray msgs ix msg
+                    go (ix + 1)
+                  Nothing -> pure (Left (exception Receive SocketAddressFamily))
+                else pure (Left (exception Receive SocketAddressSize))
+              else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+        else do
+          r <- PM.unsafeFreezeArray msgs
+          pure (Right r)
+  go 0
+
+-- Used internally in arrays
+errorThunk :: a
+errorThunk = error "Socket.Datagram.IPv4.Undestined: uninitialized element"
 
 -- | Receive a datagram into a mutable byte array, ignoring information about
 --   the remote endpoint. Returns the actual number of bytes present in the
@@ -253,9 +312,9 @@ be handled gracefully.
 >   unhandled $ withSocket (Endpoint IPv4.loopback 0) $ \sock port -> do
 >     BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
 >     replicateM_ 10 $ do
->       (remote,ByteArray payload) <- unhandled (receive sock 1024)
->       BC.putStrLn ("Datagram from " <> BC.pack (show remote))
->       BC.putStr (SB.fromShort (SB.SBS payload))
+>       (sender,ByteArray contents) <- unhandled (receive sock 1024)
+>       BC.putStrLn ("Datagram from " <> BC.pack (show sender))
+>       BC.putStr (SB.fromShort (SB.SBS contents))
 > 
 > unhandled :: Exception e => IO (Either e a) -> IO a
 > unhandled action = action >>= either throwIO pure

@@ -53,7 +53,7 @@ udpStdoutServer = do
   unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
     replicateM_ 10 $ do
-      (remote,ByteArray payload) <- unhandled (DIU.receive sock 1024)
+      DIU.Message remote (ByteArray payload) <- unhandled (DIU.receive sock 1024)
       BC.putStrLn ("Datagram from " <> BC.pack (show remote))
       BC.putStr (SB.fromShort (SB.SBS payload))
 
