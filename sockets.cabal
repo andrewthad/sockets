@@ -32,7 +32,7 @@ library
     Socket.IPv4
     Socket
   build-depends:
-    , base >= 4.11.1.0
+    , base >= 4.11.1.0 && < 5
     , posix-api >= 0.2
     , primitive >= 0.6.4
     , ip >= 1.4.1
@@ -49,7 +49,7 @@ test-suite test
   hs-source-dirs: test
   main-is: Main.hs
   build-depends:
-    , base
+    , base >= 4.11.1.0 && < 5
     , sockets
     , tasty
     , tasty-hunit
@@ -62,7 +62,7 @@ test-suite test
 benchmark macro
   type: exitcode-stdio-1.0
   build-depends:
-    , base
+    , base >= 4.11.1.0 && < 5
     , sockets
     , ip >= 1.4.1
     , primitive >= 0.6.4
@@ -74,7 +74,7 @@ benchmark macro
 executable sockets-example
   if flag(example)
     build-depends:
-      , base
+      , base >= 4.11.1.0 && < 5
       , sockets
       , ip >= 1.4.1
       , primitive >= 0.6.4
