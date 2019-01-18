@@ -312,7 +312,7 @@ be handled gracefully.
 >   unhandled $ withSocket (Endpoint IPv4.loopback 0) $ \sock port -> do
 >     BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
 >     replicateM_ 10 $ do
->       (sender,ByteArray contents) <- unhandled (receive sock 1024)
+>     DIU.Message sender (ByteArray contents) <- unhandled (DIU.receive sock 1024)
 >       BC.putStrLn ("Datagram from " <> BC.pack (show sender))
 >       BC.putStr (SB.fromShort (SB.SBS contents))
 > 
