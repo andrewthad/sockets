@@ -28,6 +28,7 @@ tests = testGroup "socket"
       [ testGroup "undestined"
         [ testCase "A" testDatagramUndestinedA
         , testCase "B" testDatagramUndestinedB
+        , testCase "C" testDatagramUndestinedC
         ]
       ]
     ]
@@ -88,6 +89,45 @@ testDatagramUndestinedB = do
     if PM.sizeofArray msgs == 2
       then pure (PM.indexArray msgs 0, PM.indexArray msgs 1)
       else fail "received a number of messages other than 2"
+      
+testDatagramUndestinedC :: Assertion
+testDatagramUndestinedC = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
+  (port,received) <- concurrently (sender m n) (receiver m n)
+  received @=?
+    ( DIU.Message (DIU.Endpoint IPv4.loopback port) message1
+    , DIU.Message (DIU.Endpoint IPv4.loopback port) message2
+    , DIU.Message (DIU.Endpoint IPv4.loopback port) message3
+    )
+  where
+  message1 = E.fromList (enumFromTo 0 9):: ByteArray
+  message2 = E.fromList (enumFromTo 10 10) :: ByteArray
+  message3 = E.fromList (enumFromTo 11 25) :: ByteArray
+  sz1 = PM.sizeofByteArray message1
+  sz2 = PM.sizeofByteArray message2
+  sz3 = PM.sizeofByteArray message3
+  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
+  sender m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message1 0 sz1
+    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message2 0 sz2
+    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message3 0 sz3
+    PM.putMVar n ()
+    pure srcPort
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message,DIU.Message)
+  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    PM.takeMVar n
+    msgsX <- unhandled $ DIU.receiveMany sock 2 (max sz1 sz2)
+    (msg1,msg2) <- if PM.sizeofArray msgsX == 2
+      then pure (PM.indexArray msgsX 0, PM.indexArray msgsX 1)
+      else fail "received a number of messages other than 2"
+    msgsY <- unhandled $ DIU.receiveMany sock 2 sz3
+    msg3 <- if PM.sizeofArray msgsY == 1
+      then pure (PM.indexArray msgsY 0)
+      else fail "received a number of messages other than 2"
+    pure (msg1,msg2,msg3)
       
 
 -- This test involves a made up protocol that goes like this:
