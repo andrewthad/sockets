@@ -74,13 +74,13 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
         Left err -> do
           -- We intentionally discard any exceptions thrown by close. There is
           -- simply nothing that can be done with them.
-          _ <- S.uninterruptibleClose fd
+          S.uninterruptibleErrorlessClose fd
           pure (Left (errorCode Bind err))
         Right _ -> do
           eactualPort <- if specifiedPort == 0
             then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
               Left err -> do
-                _ <- S.uninterruptibleClose fd
+                S.uninterruptibleErrorlessClose fd
                 pure (Left (errorCode GetName err))
               Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
@@ -89,16 +89,16 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                     debug ("withSocket: successfully bound " ++ show endpoint ++ " and got port " ++ show cleanPort)
                     pure (Right cleanPort)
                   Nothing -> do
-                    _ <- S.uninterruptibleClose fd
+                    S.uninterruptibleErrorlessClose fd
                     pure (Left (exception GetName SocketAddressFamily))
                 else do
-                  _ <- S.uninterruptibleClose fd
+                  S.uninterruptibleErrorlessClose fd
                   pure (Left (exception GetName SocketAddressSize))
             else pure (Right specifiedPort)
           case eactualPort of
             Left err -> pure (Left err)
             Right actualPort -> do
-              a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleClose fd)
+              a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleErrorlessClose fd)
               S.uninterruptibleClose fd >>= \case
                 Left err -> pure (Left (errorCode Close err))
                 Right _ -> pure (Right a)
