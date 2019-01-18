@@ -15,14 +15,17 @@ module Socket.Datagram.IPv4.Undestined
     -- * Communicate
   , send
   , receive
+  , receiveMutableByteArraySlice_
     -- * Exceptions
   , SocketException(..)
   , Context(..)
   , Reason(..)
+    -- * Examples
+    -- $examples
   ) where
 
 import Control.Concurrent (threadWaitWrite,threadWaitRead)
-import Control.Exception (Exception,mask,onException)
+import Control.Exception (mask,onException)
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
@@ -81,7 +84,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                 pure (Left (errorCode GetName err))
               Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
-                  Just sockAddrInet@S.SocketAddressInternet{port = actualPort} -> do
+                  Just S.SocketAddressInternet{port = actualPort} -> do
                     let cleanPort = S.networkToHostShort actualPort
                     debug ("withSocket: successfully bound " ++ show endpoint ++ " and got port " ++ show cleanPort)
                     pure (Right cleanPort)
@@ -95,7 +98,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           case eactualPort of
             Left err -> pure (Left err)
             Right actualPort -> do
-              a <- onException (f (Socket fd) actualPort) (S.uninterruptibleClose fd)
+              a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleClose fd)
               S.uninterruptibleClose fd >>= \case
                 Left err -> pure (Left (errorCode Close err))
                 Right _ -> pure (Right a)
@@ -140,7 +143,7 @@ send (Socket !s) !remote !payload !off !len = do
         pure (Right ())
       else pure (Left (exception Send (MessageTruncated (csizeToInt sz) len)))
 
--- | Receive a datagram into a bytearray. If the 
+-- | Receive a datagram into a freshly allocated bytearray.
 receive ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum size of datagram to receive
@@ -171,6 +174,28 @@ receive (Socket !fd) !maxSz = do
               )
           Nothing -> pure (Left (exception Receive SocketAddressFamily))
         else pure (Left (exception Receive SocketAddressSize))
+      else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+
+-- | Receive a datagram into a mutable byte array, ignoring information about
+--   the remote endpoint. Returns the actual number of bytes present in the
+--   datagram. Precondition: @buffer_length - offset >= max_datagram_length@.
+receiveMutableByteArraySlice_ ::
+     Socket -- ^ Socket
+  -> MutableByteArray RealWorld -- ^ Buffer
+  -> Int -- ^ Offset into buffer
+  -> Int -- ^ Maximum size of datagram to receive
+  -> IO (Either SocketException Int)
+receiveMutableByteArraySlice_ (Socket !fd) !buf !off !maxSz = do
+  threadWaitRead fd
+  -- We use MSG_TRUNC so that we are able to figure out whether
+  -- or not bytes were discarded. If bytes were discarded
+  -- (meaning that the buffer was too small), we return an
+  -- exception.
+  e <- S.uninterruptibleReceiveFromMutableByteArray_ fd buf (intToCInt off) (intToCSize maxSz) (L.truncate)
+  case e of
+    Left err -> pure (Left (errorCode Receive err))
+    Right recvSz -> if csizeToInt recvSz <= maxSz
+      then pure (Right (csizeToInt recvSz))
       else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
 
 -- TODO: add receiveTimeout
@@ -211,3 +236,28 @@ exception func reason = SocketException func reason
 shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
 shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
   PM.primitive_ (shrinkMutableByteArray# arr sz)
+
+{- $examples
+ 
+Print every UDP packet that we receive. This terminates, closing the
+socket, after receiving ten packets. This code throws any exception that
+happens. This is commonly a useful behavior since most exceptions cannot
+be handled gracefully.
+
+> import qualified Data.ByteString.Char8 as BC
+> import Control.Monad (replicateM_)
+> import qualified Data.ByteString.Short.Internal as SB
+> 
+> udpStdoutServer :: IO ()
+> udpStdoutServer = do
+>   unhandled $ withSocket (Endpoint IPv4.loopback 0) $ \sock port -> do
+>     BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
+>     replicateM_ 10 $ do
+>       (remote,ByteArray payload) <- unhandled (receive sock 1024)
+>       BC.putStrLn ("Datagram from " <> BC.pack (show remote))
+>       BC.putStr (SB.fromShort (SB.SBS payload))
+> 
+> unhandled :: Exception e => IO (Either e a) -> IO a
+> unhandled action = action >>= either throwIO pure
+
+-}

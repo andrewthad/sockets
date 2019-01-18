@@ -17,10 +17,13 @@ module Socket.Stream.IPv4
   , forkAccepted
   , forkAcceptedUnmasked
     -- * Communicate
-  , sendSlice
   , sendByteArray
+  , sendByteArraySlice
+  , sendMutableByteArray
+  , sendMutableByteArraySlice
   , receiveByteArray
   , receiveBoundedByteArray
+  , receiveMutableByteArray
     -- * Exceptions
   , SocketException(..)
   , Context(..)
@@ -29,7 +32,7 @@ module Socket.Stream.IPv4
 
 import Control.Concurrent (ThreadId,threadWaitWrite,threadWaitRead)
 import Control.Concurrent (forkIO,forkIOWithUnmask)
-import Control.Exception (Exception,mask,onException)
+import Control.Exception (mask,onException)
 import Data.Bifunctor (bimap)
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16)
@@ -91,7 +94,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                   pure (Left (errorCode GetName err))
                 Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                   then case S.decodeSocketAddressInternet sockAddr of
-                    Just sockAddrInet@S.SocketAddressInternet{port = actualPort} -> do
+                    Just S.SocketAddressInternet{port = actualPort} -> do
                       let cleanActualPort = S.networkToHostShort actualPort
                       debug ("withSocket: successfully bound listener " ++ show endpoint ++ " and got port " ++ show cleanActualPort)
                       pure (Right cleanActualPort)
@@ -105,7 +108,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
             case eactualPort of
               Left err -> pure (Left err)
               Right actualPort -> do
-                a <- onException (f (Listener fd) actualPort) (S.uninterruptibleClose fd)
+                a <- onException (restore (f (Listener fd) actualPort)) (S.uninterruptibleClose fd)
                 S.uninterruptibleClose fd >>= \case
                   Left err -> pure (Left (errorCode Close err))
                   Right _ -> pure (Right a)
@@ -121,55 +124,10 @@ withAccepted ::
      Listener
   -> (Connection -> Endpoint -> IO a)
   -> IO (Either SocketException a)
-withAccepted (Listener !lst) f = do
-  threadWaitRead lst
-  mask $ \restore -> do
-    S.uninterruptibleAccept lst S.sizeofSocketAddressInternet >>= \case
-      Left err -> pure (Left (errorCode Accept err))
-      Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
-        then case S.decodeSocketAddressInternet sockAddr of
-          Just sockAddrInet -> do
-            let acceptedEndpoint = socketAddressInternetToEndpoint sockAddrInet
-            debug ("withAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
-            a <- onException (restore (f (Connection acpt) acceptedEndpoint)) (S.uninterruptibleClose acpt)
-            S.uninterruptibleShutdown acpt S.write >>= \case
-              Left err -> do
-                _ <- S.uninterruptibleClose acpt
-                pure (Left (errorCode Shutdown err))
-              Right _ -> do
-                buf <- PM.newByteArray 1
-                S.uninterruptibleReceiveMutableByteArray acpt buf 0 1 mempty >>= \case
-                  Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
-                    then do
-                      threadWaitRead acpt
-                      S.uninterruptibleReceiveMutableByteArray acpt buf 0 1 mempty >>= \case
-                        Left err -> do
-                          _ <- S.uninterruptibleClose acpt
-                          pure (Left (errorCode Shutdown err))
-                        Right sz -> if sz == 0
-                          then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose acpt)
-                          else do
-                            debug ("withAccepted: remote not shutdown A")
-                            _ <- S.uninterruptibleClose acpt
-                            pure (Left (exception Shutdown RemoteNotShutdown))
-                    else do
-                      _ <- S.uninterruptibleClose acpt
-                      -- Is this the right error context? It's a call
-                      -- to recv, but it happens while shutting down
-                      -- the socket.
-                      pure (Left (errorCode Shutdown err1))
-                  Right sz -> if sz == 0
-                    then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose acpt)
-                    else do
-                      debug ("withAccepted: remote not shutdown B")
-                      _ <- S.uninterruptibleClose acpt
-                      pure (Left (exception Shutdown RemoteNotShutdown))
-          Nothing -> do
-            _ <- S.uninterruptibleClose acpt
-            pure (Left (exception GetName SocketAddressFamily))
-        else do
-          _ <- S.uninterruptibleClose acpt
-          pure (Left (exception GetName SocketAddressSize))
+withAccepted lst cb = internalAccepted
+  ( \restore action -> do
+    action restore
+  ) lst cb
 
 internalAccepted ::
      ((forall x. IO x -> IO x) -> ((IO a -> IO b) -> IO (Either SocketException b)) -> IO (Either SocketException c))
@@ -188,36 +146,7 @@ internalAccepted wrap (Listener !lst) f = do
             debug ("withAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
             wrap restore $ \restore' -> do
               a <- onException (restore' (f (Connection acpt) acceptedEndpoint)) (S.uninterruptibleClose acpt)
-              S.uninterruptibleShutdown acpt S.write >>= \case
-                Left err -> do
-                  _ <- S.uninterruptibleClose acpt
-                  pure (Left (errorCode Shutdown err))
-                Right _ -> do
-                  buf <- PM.newByteArray 1
-                  S.uninterruptibleReceiveMutableByteArray acpt buf 0 1 mempty >>= \case
-                    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
-                      then do
-                        threadWaitRead acpt
-                        S.uninterruptibleReceiveMutableByteArray acpt buf 0 1 mempty >>= \case
-                          Left err -> do
-                            _ <- S.uninterruptibleClose acpt
-                            pure (Left (errorCode Shutdown err))
-                          Right sz -> if sz == 0
-                            then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose acpt)
-                            else do
-                              _ <- S.uninterruptibleClose acpt
-                              pure (Left (exception Shutdown RemoteNotShutdown))
-                      else do
-                        _ <- S.uninterruptibleClose acpt
-                        -- Is this the right error context? It's a call
-                        -- to recv, but it happens while shutting down
-                        -- the socket.
-                        pure (Left (errorCode Shutdown err1))
-                    Right sz -> if sz == 0
-                      then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose acpt)
-                      else do
-                        _ <- S.uninterruptibleClose acpt
-                        pure (Left (exception Shutdown RemoteNotShutdown))
+              gracefulClose acpt a
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
             pure (Left (exception GetName SocketAddressFamily))
@@ -347,15 +276,15 @@ sendByteArray ::
   -> ByteArray -- ^ Buffer (will be sliced)
   -> IO (Either SocketException ())
 sendByteArray conn arr =
-  sendSlice conn arr 0 (PM.sizeofByteArray arr)
+  sendByteArraySlice conn arr 0 (PM.sizeofByteArray arr)
 
-sendSlice ::
+sendByteArraySlice ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
   -> IO (Either SocketException ())
-sendSlice !conn !payload !off0 !len0 = go off0 len0
+sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
   go !off !len = if len > 0
     then internalSend conn payload off len >>= \case
@@ -364,6 +293,55 @@ sendSlice !conn !payload !off0 !len0 = go off0 len0
         let sz = csizeToInt sz'
         go (off + sz) (len - sz)
     else pure (Right ())
+
+sendMutableByteArray ::
+     Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> IO (Either SocketException ())
+sendMutableByteArray conn arr =
+  sendMutableByteArraySlice conn arr 0 =<< PM.getSizeofMutableByteArray arr
+
+sendMutableByteArraySlice ::
+     Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Lenth of slice into buffer
+  -> IO (Either SocketException ())
+sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
+  where
+  go !off !len = if len > 0
+    then internalSendMutable conn payload off len >>= \case
+      Left e -> pure (Left e)
+      Right sz' -> do
+        let sz = csizeToInt sz'
+        go (off + sz) (len - sz)
+    else pure (Right ())
+
+-- The length must be greater than zero.
+internalSendMutable :: 
+     Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either SocketException CSize)
+internalSendMutable (Connection !s) !payload !off !len = do
+  e1 <- S.uninterruptibleSendMutableByteArray s payload
+    (intToCInt off)
+    (intToCSize len)
+    mempty
+  case e1 of
+    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
+      then do
+        threadWaitWrite s
+        e2 <- S.uninterruptibleSendMutableByteArray s payload
+          (intToCInt off)
+          (intToCSize len)
+          mempty
+        case e2 of
+          Left err2 -> pure (Left (errorCode Send err2))
+          Right sz -> pure (Right sz)
+      else pure (Left (errorCode Send err1))
+    Right sz -> pure (Right sz)
 
 -- The length must be greater than zero.
 internalSend ::
@@ -441,6 +419,26 @@ receiveByteArray !conn0 !total = do
       arr <- PM.unsafeFreezeByteArray marr
       pure (Right arr)
     LT -> pure (Left (exception Receive NegativeBytesRequested))
+
+-- | Receive a number of bytes exactly equal to the size of the mutable
+--   byte array. If the remote application shuts down its end of the
+--   connection before sending the required number of bytes, this returns
+--   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
+receiveMutableByteArray ::
+     Connection
+  -> MutableByteArray RealWorld
+  -> IO (Either SocketException ())
+receiveMutableByteArray !conn0 !marr0 = do
+  total <- PM.getSizeofMutableByteArray marr0
+  go conn0 marr0 0 total
+  where
+  go !conn !marr !off !remaining = if remaining > 0
+    then internalReceiveMaximally conn remaining marr off >>= \case
+      Left err -> pure (Left err)
+      Right sz -> if sz /= 0
+        then go conn marr (off + sz) (remaining - sz)
+        else pure (Left (exception Receive RemoteShutdown))
+    else pure (Right ())
 
 -- | Receive up to the given number of bytes. If the remote application
 --   shuts down its end of the connection instead of sending any bytes,

@@ -6,6 +6,8 @@ import Prelude hiding (log)
 
 import Control.Exception (Exception,throwIO)
 import System.Environment (getArgs)
+import Data.Primitive (ByteArray(..))
+import Control.Monad (replicateM_)
 
 import qualified Socket.Datagram.IPv4.Undestined as DIU
 import qualified Socket.Stream.IPv4 as SI
@@ -19,19 +21,19 @@ import qualified Data.ByteString.Char8 as BC
 import qualified System.Log.FastLogger as FL
 
 main :: IO ()
-main = gettysburgClient
+main = udpStdoutServer
 
 gettysburgClient :: IO ()
 gettysburgClient = do
   [port] <- getArgs
-  unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback (read port)) $ \conn -> do
+  unhandled $ SI.withConnection (SI.Endpoint IPv4.loopback (read port)) $ \conn -> do
     unhandled $ SI.sendByteArray conn gettysburgAddress
 
 -- This waits until a single connection is established. It then dumps out
 -- anything it receives to stdout. When the remote application shuts down
 -- its end, this shuts down its end in return and then terminates.
-stdoutServer :: IO ()
-stdoutServer = do
+tcpStdoutServer :: IO ()
+tcpStdoutServer = do
   FL.withFastLogger (FL.LogStdout 2048) $ \log -> do
     unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
       log (FL.toLogStr ("Listening on 127.0.0.1:" <> BC.pack (show port) <> "\n============================\n"))
@@ -43,6 +45,17 @@ stdoutServer = do
                 log (FL.toLogStr (SB.fromShort (SB.SBS arr)))
                 go
         go
+
+-- Print every UDP packet that we receive. This terminates, closing the
+-- socket, after receiving ten packets.
+udpStdoutServer :: IO ()
+udpStdoutServer = do
+  unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
+    replicateM_ 10 $ do
+      (remote,ByteArray payload) <- unhandled (DIU.receive sock 1024)
+      BC.putStrLn ("Datagram from " <> BC.pack (show remote))
+      BC.putStr (SB.fromShort (SB.SBS payload))
 
 unhandled :: Exception e => IO (Either e a) -> IO a
 unhandled action = action >>= either throwIO pure

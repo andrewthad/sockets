@@ -19,7 +19,55 @@ import qualified Data.Primitive.MVar as PM
 import qualified Net.IPv4 as IPv4
 
 main :: IO ()
-main = defaultMain tests
+main = do
+  [duration] <- getArgs
+  newIORef True
+  complete <- newPrimArray 1
+  replicateM_ (take
+  
+
+participants :: Int
+participants = 128
+
+totalReceives :: Int
+totalReceives = 1000000
+
+-- The PrimArray must be of length @participants@.
+worker :: 
+     Int -- ^ Worker identifier
+  -> MutablePrimArray RealWorld Int -- ^ Counter of opened sockets, singleton array
+  -> MutablePrimArray RealWorld Int -- ^ Counter of total sends, singleton array
+  -> MutablePrimArray RealWorld Word16 -- ^ Ports used by local team
+  -> MVar (PrimArray Word16) -- ^ MVar for ports used by local team
+  -> MVar (PrimArray Word16) -- ^ MVar for ports used by remote team
+  -> IO ()
+worker !ident !counter !locals !mlocals !mremotes = do
+  unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    PM.writePrimArray locals ident port
+    increment counter >>= \case
+      True -> PM.unsafeFreezePrimArray locals >>= putMVar mlocals
+      False -> pure ()
+    remotes <- readMVar mremotes
+    act 
+
+act ::
+     DIU.Socket -- Socket
+  -> MutableByteArray RealWorld -- Buffer for receives
+  -> PrimArray Word16 -- Ports used by remote team
+  -> IO ()
+act !sock !buf !remotes = case act of
+  DIU.send sock _ _ _ _
+  DIU.send sock _ _ _ _
+
+-- Returns true if the value of the counter reached the total
+-- number of participants.
+incrementWorkerCounter :: MutablePrimArray RealWorld Int -> IO Bool
+incrementWorkerCounter (MutablePrimArray arr) = IO $ \s0 -> case fetchAddIntArray arr 0# 1# s0 of
+  (# s1, i #) -> (# s1, I# i == participants - 1 #)
+
+incrementReceiveCounter :: MutablePrimArray RealWorld Int -> IO Bool
+incrementReceiveCounter (MutablePrimArray arr) = IO $ \s0 -> case fetchAddIntArray arr 0# 1# s0 of
+  (# s1, i #) -> (# s1, I# i == totalReceives - 1 #)
 
 tests :: TestTree
 tests = testGroup "socket"
@@ -91,5 +139,6 @@ testStreamA = do
       let theSize = PM.indexByteArray serializedSize 0 :: Int
       result <- unhandled $ SI.receiveByteArray conn theSize
       pure result
+
 
 
