@@ -1,6 +1,6 @@
 cabal-version: 2.2
 name: sockets
-version: 0.1.0.0
+version: 0.1.1.0
 synopsis: High-level network sockets
 description: High-level abstraction for network sockets
 homepage: https://github.com/andrewthad/sockets
