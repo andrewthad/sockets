@@ -5,8 +5,6 @@
 
 module Socket
   ( SocketException(..)
-  , Context(..)
-  , Reason(..)
   ) where
 
 import Control.Exception (Exception)
@@ -14,33 +12,15 @@ import Foreign.C.Types (CInt)
 
 -- | Represents any unexpected behaviors that a function working on a
 --   socket, connection, or listener can exhibit.
-data SocketException = SocketException
-  { context :: Context
-  , reason :: Reason
-  }
-  deriving stock (Eq,Show)
-  deriving anyclass (Exception)
-
--- | The function that behaved unexpectedly.
-data Context
-  = Accept
-  | Bind
-  | Close
-  | Connect
-  | GetName
-  | Listen
-  | Open
-  | Option
-  | Receive
-  | Send
-  | Shutdown
-  deriving stock (Eq,Show)
-
--- | A description of the unexpected behavior.
-data Reason
-  = MessageTruncated !Int !Int
+data SocketException
+  = SentMessageTruncated !Int
     -- ^ The datagram did not fit in the buffer. This can happen while
-    --   sending or receiving. Fields: buffer size, datagram size.
+    --   sending. The field is the size of the number of bytes in the
+    --   datagram that were successfully copied into the send buffer.
+  | ReceivedMessageTruncated !Int
+    -- ^ The datagram did not fit in the buffer. This can happen while
+    --   receiving. The field is the original size of the datagram that
+    --   was was truncated while copying it into the buffer.
   | SocketAddressSize
     -- ^ The socket address was not the expected size. This exception
     --   indicates a bug in this library or (less likely) in the
@@ -72,3 +52,4 @@ data Reason
     --   not expect or recognize. Consult your operating system manual
     --   for details about the error code.
   deriving stock (Eq,Show)
+  deriving anyclass (Exception)

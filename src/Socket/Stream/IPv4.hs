@@ -26,8 +26,6 @@ module Socket.Stream.IPv4
   , receiveMutableByteArray
     -- * Exceptions
   , SocketException(..)
-  , Context(..)
-  , Reason(..)
   ) where
 
 import Control.Concurrent (ThreadId,threadWaitWrite,threadWaitRead)
@@ -39,7 +37,7 @@ import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eAGAIN,eWOULDBLOCK,eINPROGRESS)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (RealWorld,Int(I#),shrinkMutableByteArray#)
-import Socket (SocketException(..),Context(..),Reason(..))
+import Socket (SocketException(..))
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..))
 import System.Posix.Types (Fd)
@@ -67,7 +65,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
     S.defaultProtocol
   debug ("withSocket: opened listener " ++ show endpoint)
   case e1 of
-    Left err -> pure (Left (errorCode Open err))
+    Left err -> pure (Left (errorCode err))
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
@@ -75,7 +73,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
       case e2 of
         Left err -> do
           _ <- S.uninterruptibleClose fd
-          pure (Left (errorCode Bind err))
+          pure (Left (errorCode err))
         Right _ -> S.uninterruptibleListen fd 16 >>= \case
           -- We hardcode the listen backlog to 16. The author is unfamiliar
           -- with use cases where gains are realized from tuning this parameter.
@@ -83,7 +81,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           Left err -> do
             _ <- S.uninterruptibleClose fd
             debug "withSocket: listen failed with error code"
-            pure (Left (errorCode Listen err))
+            pure (Left (errorCode err))
           Right _ -> do 
             -- The getsockname is copied from code in Socket.Datagram.IPv4.Undestined.
             -- Consider factoring this out.
@@ -91,7 +89,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
               then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
                 Left err -> do
                   _ <- S.uninterruptibleClose fd
-                  pure (Left (errorCode GetName err))
+                  pure (Left (errorCode err))
                 Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                   then case S.decodeSocketAddressInternet sockAddr of
                     Just S.SocketAddressInternet{port = actualPort} -> do
@@ -100,17 +98,17 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                       pure (Right cleanActualPort)
                     Nothing -> do
                       _ <- S.uninterruptibleClose fd
-                      pure (Left (exception GetName SocketAddressFamily))
+                      pure (Left SocketAddressFamily)
                   else do
                     _ <- S.uninterruptibleClose fd
-                    pure (Left (exception GetName SocketAddressSize))
+                    pure (Left SocketAddressSize)
               else pure (Right specifiedPort)
             case eactualPort of
               Left err -> pure (Left err)
               Right actualPort -> do
                 a <- onException (restore (f (Listener fd) actualPort)) (S.uninterruptibleClose fd)
                 S.uninterruptibleClose fd >>= \case
-                  Left err -> pure (Left (errorCode Close err))
+                  Left err -> pure (Left (errorCode err))
                   Right _ -> pure (Right a)
 
 -- | Accept a connection on the listener and run the supplied callback
@@ -138,7 +136,7 @@ internalAccepted wrap (Listener !lst) f = do
   threadWaitRead lst
   mask $ \restore -> do
     S.uninterruptibleAccept lst S.sizeofSocketAddressInternet >>= \case
-      Left err -> pure (Left (errorCode Accept err))
+      Left err -> pure (Left (errorCode err))
       Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
         then case S.decodeSocketAddressInternet sockAddr of
           Just sockAddrInet -> do
@@ -149,16 +147,16 @@ internalAccepted wrap (Listener !lst) f = do
               gracefulClose acpt a
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
-            pure (Left (exception GetName SocketAddressFamily))
+            pure (Left SocketAddressFamily)
         else do
           _ <- S.uninterruptibleClose acpt
-          pure (Left (exception GetName SocketAddressSize))
+          pure (Left SocketAddressSize)
 
 gracefulClose :: Fd -> a -> IO (Either SocketException a)
 gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
   Left err -> do
     _ <- S.uninterruptibleClose fd
-    pure (Left (errorCode Shutdown err))
+    pure (Left (errorCode err))
   Right _ -> do
     buf <- PM.newByteArray 1
     S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
@@ -168,25 +166,25 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
           S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
             Left err -> do
               _ <- S.uninterruptibleClose fd
-              pure (Left (errorCode Shutdown err))
+              pure (Left (errorCode err))
             Right sz -> if sz == 0
-              then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose fd)
+              then fmap (bimap errorCode (const a)) (S.uninterruptibleClose fd)
               else do
                 debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
                 _ <- S.uninterruptibleClose fd
-                pure (Left (exception Shutdown RemoteNotShutdown))
+                pure (Left RemoteNotShutdown)
         else do
           _ <- S.uninterruptibleClose fd
           -- Is this the right error context? It's a call
           -- to recv, but it happens while shutting down
           -- the socket.
-          pure (Left (errorCode Shutdown err1))
+          pure (Left (errorCode err1))
       Right sz -> if sz == 0
-        then fmap (bimap (errorCode Close) (const a)) (S.uninterruptibleClose fd)
+        then fmap (bimap errorCode (const a)) (S.uninterruptibleClose fd)
         else do
           debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
           _ <- S.uninterruptibleClose fd
-          pure (Left (exception Shutdown RemoteNotShutdown))
+          pure (Left RemoteNotShutdown)
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. Prefer 'forkAcceptedUnmasked' unless the masking state
@@ -233,7 +231,7 @@ withConnection !remote f = mask $ \restore -> do
     S.defaultProtocol
   debug ("withSocket: opened connection " ++ show remote)
   case e1 of
-    Left err1 -> pure (Left (errorCode Open err1))
+    Left err1 -> pure (Left (errorCode err1))
     Right fd -> do
       let sockAddr = id
             $ S.encodeSocketAddressInternet
@@ -244,7 +242,7 @@ withConnection !remote f = mask $ \restore -> do
           then do
             threadWaitWrite fd
             pure Nothing
-          else pure (Just (errorCode Connect err2))
+          else pure (Just (errorCode err2))
         Right _ -> pure Nothing
       case merr of
         Just err -> do
@@ -256,7 +254,7 @@ withConnection !remote f = mask $ \restore -> do
           case e of
             Left err -> do
               _ <- S.uninterruptibleClose fd
-              pure (Left (errorCode Option err))
+              pure (Left (errorCode err))
             Right (sz,S.OptionValue val) -> if sz == intToCInt (PM.sizeOf (undefined :: CInt))
               then
                 let err = PM.indexByteArray val 0 :: CInt in
@@ -266,10 +264,10 @@ withConnection !remote f = mask $ \restore -> do
                     gracefulClose fd a
                   else do
                     _ <- S.uninterruptibleClose fd
-                    pure (Left (errorCode Connect (Errno err)))
+                    pure (Left (errorCode (Errno err)))
               else do
                 _ <- S.uninterruptibleClose fd
-                pure (Left (exception Option OptionValueSize))
+                pure (Left OptionValueSize)
 
 sendByteArray ::
      Connection -- ^ Connection
@@ -338,9 +336,9 @@ internalSendMutable (Connection !s) !payload !off !len = do
           (intToCSize len)
           mempty
         case e2 of
-          Left err2 -> pure (Left (errorCode Send err2))
+          Left err2 -> pure (Left (errorCode err2))
           Right sz -> pure (Right sz)
-      else pure (Left (errorCode Send err1))
+      else pure (Left (errorCode err1))
     Right sz -> pure (Right sz)
 
 -- The length must be greater than zero.
@@ -369,9 +367,9 @@ internalSend (Connection !s) !payload !off !len = do
         case e2 of
           Left err2 -> do
             debug "send: encountered error after sending chunk on stream socket"
-            pure (Left (errorCode Send err2))
+            pure (Left (errorCode err2))
           Right sz -> pure (Right sz)
-      else pure (Left (errorCode Send err1))
+      else pure (Left (errorCode err1))
     Right sz -> pure (Right sz)
 
 -- The maximum number of bytes to receive must be greater than zero.
@@ -394,7 +392,7 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
   debug "receive: finished reading from stream socket"
   case e of
-    Left err -> pure (Left (errorCode Receive err))
+    Left err -> pure (Left (errorCode err))
     Right recvSz -> pure (Right (csizeToInt recvSz))
 
 -- | Receive exactly the given number of bytes. If the remote application
@@ -414,11 +412,11 @@ receiveByteArray !conn0 !total = do
       Left err -> pure (Left err)
       Right sz -> if sz /= 0
         then go conn marr (off + sz) (remaining - sz)
-        else pure (Left (exception Receive RemoteShutdown))
+        else pure (Left RemoteShutdown)
     EQ -> do
       arr <- PM.unsafeFreezeByteArray marr
       pure (Right arr)
-    LT -> pure (Left (exception Receive NegativeBytesRequested))
+    LT -> pure (Left NegativeBytesRequested)
 
 -- | Receive a number of bytes exactly equal to the size of the mutable
 --   byte array. If the remote application shuts down its end of the
@@ -437,7 +435,7 @@ receiveMutableByteArray !conn0 !marr0 = do
       Left err -> pure (Left err)
       Right sz -> if sz /= 0
         then go conn marr (off + sz) (remaining - sz)
-        else pure (Left (exception Receive RemoteShutdown))
+        else pure (Left RemoteShutdown)
     else pure (Right ())
 
 -- | Receive up to the given number of bytes. If the remote application
@@ -457,9 +455,9 @@ receiveBoundedByteArray !conn !total
           then do
             shrinkMutableByteArray m sz
             fmap Right (PM.unsafeFreezeByteArray m)
-          else pure (Left (exception Receive RemoteShutdown))
+          else pure (Left RemoteShutdown)
   | total == 0 = pure (Right mempty)
-  | otherwise = pure (Left (exception Receive NegativeBytesRequested))
+  | otherwise = pure (Left NegativeBytesRequested)
 
 endpointToSocketAddressInternet :: Endpoint -> S.SocketAddressInternet
 endpointToSocketAddressInternet (Endpoint {address, port}) = S.SocketAddressInternet
@@ -473,12 +471,6 @@ socketAddressInternetToEndpoint (S.SocketAddressInternet {address,port}) = Endpo
   , port = S.networkToHostShort port
   }
 
-errorCode :: Context -> Errno -> SocketException
-errorCode func (Errno x) = SocketException func (ErrorCode x)
-
-exception :: Context -> Reason -> SocketException
-exception func reason = SocketException func reason
-
 intToCInt :: Int -> CInt
 intToCInt = fromIntegral
 
@@ -491,3 +483,7 @@ csizeToInt = fromIntegral
 shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
 shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
   PM.primitive_ (shrinkMutableByteArray# arr sz)
+
+errorCode :: Errno -> SocketException
+errorCode (Errno x) = ErrorCode x
+

@@ -21,8 +21,6 @@ module Socket.Datagram.IPv4.Undestined
   , receiveMany
     -- * Exceptions
   , SocketException(..)
-  , Context(..)
-  , Reason(..)
     -- * Examples
     -- $examples
   ) where
@@ -36,7 +34,7 @@ import Foreign.C.Types (CInt,CSize,CUInt)
 import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (SocketException(..),Context(..),Reason(..))
+import Socket (SocketException(..))
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..))
 import System.Posix.Types (Fd)
@@ -74,7 +72,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
     S.defaultProtocol
   debug ("withSocket: opened socket " ++ show endpoint)
   case e1 of
-    Left err -> pure (Left (errorCode Open err))
+    Left err -> pure (Left (errorCode err))
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
@@ -84,13 +82,13 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           -- We intentionally discard any exceptions thrown by close. There is
           -- simply nothing that can be done with them.
           S.uninterruptibleErrorlessClose fd
-          pure (Left (errorCode Bind err))
+          pure (Left (errorCode err))
         Right _ -> do
           eactualPort <- if specifiedPort == 0
             then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
               Left err -> do
                 S.uninterruptibleErrorlessClose fd
-                pure (Left (errorCode GetName err))
+                pure (Left (errorCode err))
               Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
                   Just S.SocketAddressInternet{port = actualPort} -> do
@@ -99,17 +97,17 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                     pure (Right cleanPort)
                   Nothing -> do
                     S.uninterruptibleErrorlessClose fd
-                    pure (Left (exception GetName SocketAddressFamily))
+                    pure (Left SocketAddressFamily)
                 else do
                   S.uninterruptibleErrorlessClose fd
-                  pure (Left (exception GetName SocketAddressSize))
+                  pure (Left SocketAddressSize)
             else pure (Right specifiedPort)
           case eactualPort of
             Left err -> pure (Left err)
             Right actualPort -> do
               a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleErrorlessClose fd)
               S.uninterruptibleClose fd >>= \case
-                Left err -> pure (Left (errorCode Close err))
+                Left err -> pure (Left (errorCode err))
                 Right _ -> pure (Right a)
 
 -- | Send a slice of a bytearray to the specified endpoint.
@@ -141,16 +139,16 @@ send (Socket !s) !theRemote !thePayload !off !len = do
         case e2 of
           Left err2 -> do
             debug ("send: encountered error after sending")
-            pure (Left (errorCode Send err2))
+            pure (Left (errorCode err2))
           Right sz -> if csizeToInt sz == len
             then pure (Right ())
-            else pure (Left (exception Send (MessageTruncated (csizeToInt sz) len)))
-      else pure (Left (errorCode Send err1))
+            else pure (Left (SentMessageTruncated (csizeToInt sz)))
+      else pure (Left (errorCode err1))
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send: success")
         pure (Right ())
-      else pure (Left (exception Send (MessageTruncated (csizeToInt sz) len)))
+      else pure (Left (SentMessageTruncated (csizeToInt sz)))
 
 -- | Receive a datagram into a freshly allocated bytearray.
 receive ::
@@ -170,7 +168,7 @@ receive (Socket !fd) !maxSz = do
     (intToCSize maxSz) (L.truncate) S.sizeofSocketAddressInternet
   debug "receive: finished reading from socket"
   case e of
-    Left err -> pure (Left (errorCode Receive err))
+    Left err -> pure (Left (errorCode err))
     Right (sockAddrRequiredSz,sockAddr,recvSz) -> if csizeToInt recvSz <= maxSz
       then if sockAddrRequiredSz == S.sizeofSocketAddressInternet
         then case S.decodeSocketAddressInternet sockAddr of
@@ -178,9 +176,9 @@ receive (Socket !fd) !maxSz = do
             shrinkMutableByteArray marr (csizeToInt recvSz)
             arr <- PM.unsafeFreezeByteArray marr
             pure $ Right (Message (socketAddressInternetToEndpoint sockAddrInet) arr)
-          Nothing -> pure (Left (exception Receive SocketAddressFamily))
-        else pure (Left (exception Receive SocketAddressSize))
-      else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+          Nothing -> pure (Left SocketAddressFamily)
+        else pure (Left SocketAddressSize)
+      else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
 
 -- | Receive up to the specified number of datagrams into freshly allocated
 --   byte arrays. When there are many datagrams present on the receive
@@ -197,10 +195,10 @@ receiveManyNative :: Socket -> Int -> Int -> IO (Either SocketException (Array M
 receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
   threadWaitRead fd
   L.uninterruptibleReceiveMultipleMessageB fd S.sizeofSocketAddressInternet (intToCSize maxSz) (intToCUInt maxDatagrams) L.truncate >>= \case
-    Left err -> pure (Left (errorCode Receive err))
+    Left err -> pure (Left (errorCode err))
     Right (saneSockAddrs,sockAddrs,greatestMsgSz,msgs) -> if saneSockAddrs == 0
       then if cuintToInt greatestMsgSz > maxSz
-        then pure (Left (exception Receive (MessageTruncated maxSz (cuintToInt greatestMsgSz))))
+        then pure (Left (ReceivedMessageTruncated (cuintToInt greatestMsgSz)))
         else do
           let len = PM.sizeofUnliftedArray msgs
           let sockaddrBase = PM.byteArrayContents sockAddrs
@@ -209,7 +207,7 @@ receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
                 then S.indexSocketAddressInternet sockaddrBase ix >>= \case
                   Nothing -> do
                     touchByteArray sockAddrs
-                    pure (Left (exception Receive SocketAddressFamily))
+                    pure (Left SocketAddressFamily)
                   Just sockAddrInet -> do
                     let !msg = Message
                           (socketAddressInternetToEndpoint sockAddrInet)
@@ -220,7 +218,7 @@ receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
                   touchByteArray sockAddrs
                   fmap Right (PM.unsafeFreezeArray finalMsgs)
           go (len - 1)
-      else pure (Left (exception Receive SocketAddressSize))
+      else pure (Left SocketAddressSize)
 
 -- Although this is a shim for recvmmsg, it is still better than calling
 -- receive repeatedly since it avoids unneeded calls to the event
@@ -249,7 +247,7 @@ receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
               then do
                 r <- PM.freezeArray msgs 0 ix
                 pure (Right r)
-              else pure (Left (errorCode Receive err))
+              else pure (Left (errorCode err))
             Right (sockAddrRequiredSz,sockAddr,recvSz) -> if csizeToInt recvSz <= maxSz
               then if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
@@ -259,9 +257,9 @@ receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
                     let !msg = Message (socketAddressInternetToEndpoint sockAddrInet) arr
                     PM.writeArray msgs ix msg
                     go (ix + 1)
-                  Nothing -> pure (Left (exception Receive SocketAddressFamily))
-                else pure (Left (exception Receive SocketAddressSize))
-              else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+                  Nothing -> pure (Left SocketAddressFamily)
+                else pure (Left SocketAddressSize)
+              else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
         else do
           r <- PM.unsafeFreezeArray msgs
           pure (Right r)
@@ -288,10 +286,10 @@ receiveMutableByteArraySlice_ (Socket !fd) !buf !off !maxSz = do
   -- exception.
   e <- S.uninterruptibleReceiveFromMutableByteArray_ fd buf (intToCInt off) (intToCSize maxSz) (L.truncate)
   case e of
-    Left err -> pure (Left (errorCode Receive err))
+    Left err -> pure (Left (errorCode err))
     Right recvSz -> if csizeToInt recvSz <= maxSz
       then pure (Right (csizeToInt recvSz))
-      else pure (Left (exception Receive (MessageTruncated maxSz (csizeToInt recvSz))))
+      else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
 
 -- TODO: add receiveTimeout
 -- receiveTimeout ::
@@ -322,11 +320,8 @@ intToCSize = fromIntegral
 csizeToInt :: CSize -> Int
 csizeToInt = fromIntegral
 
-errorCode :: Context -> Errno -> SocketException
-errorCode func (Errno x) = SocketException func (ErrorCode x)
-
-exception :: Context -> Reason -> SocketException
-exception func reason = SocketException func reason
+errorCode :: Errno -> SocketException
+errorCode (Errno x) = ErrorCode x
 
 shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
 shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
