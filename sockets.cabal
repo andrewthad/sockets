@@ -84,5 +84,5 @@ executable sockets-example
     buildable: False
   hs-source-dirs: example
   main-is: Main.hs
-  ghc-options: -Wall -O2 -threaded
+  ghc-options: -Wall -O2 -threaded -ddump-to-file -ddump-simpl -dsuppress-all
   default-language: Haskell2010

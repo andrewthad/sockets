@@ -5,6 +5,7 @@
 {-# language LambdaCase #-}
 {-# language MagicHash #-}
 {-# language NamedFieldPuns #-}
+{-# language UnboxedTuples #-}
 
 module Socket.Datagram.IPv4.Undestined
   ( -- * Types
@@ -31,8 +32,9 @@ import Control.Exception (mask,onException)
 import Data.Primitive (ByteArray,MutableByteArray(..),Array)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
-import Foreign.C.Types (CInt,CSize)
-import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#)
+import Foreign.C.Types (CInt,CSize,CUInt)
+import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
+import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (SocketException(..),Context(..),Reason(..))
 import Socket.Debug (debug)
@@ -182,17 +184,51 @@ receive (Socket !fd) !maxSz = do
 
 -- | Receive up to the specified number of datagrams into freshly allocated
 --   byte arrays. When there are many datagrams present on the receive
---   buffer, this is more efficient than calling 'receive' repeatedly.
+--   buffer, this is more efficient than calling 'receive' repeatedly. The
+--   array is guaranteed to have at least one message.
 receiveMany ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum number of datagrams to receive
   -> Int -- ^ Maximum size of each datagram to receive
   -> IO (Either SocketException (Array Message))
-receiveMany = receiveManyShim
+receiveMany = receiveManyNative
+
+receiveManyNative :: Socket -> Int -> Int -> IO (Either SocketException (Array Message))
+receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
+  threadWaitRead fd
+  L.uninterruptibleReceiveMultipleMessageB fd S.sizeofSocketAddressInternet (intToCSize maxSz) (intToCUInt maxDatagrams) L.truncate >>= \case
+    Left err -> pure (Left (errorCode Receive err))
+    Right (saneSockAddrs,sockAddrs,greatestMsgSz,msgs) -> if saneSockAddrs == 0
+      then if cuintToInt greatestMsgSz > maxSz
+        then pure (Left (exception Receive (MessageTruncated maxSz (cuintToInt greatestMsgSz))))
+        else do
+          let len = PM.sizeofUnliftedArray msgs
+          let sockaddrBase = PM.byteArrayContents sockAddrs
+          finalMsgs <- PM.newArray len errorThunk
+          let go !ix = if ix >= 0
+                then S.indexSocketAddressInternet sockaddrBase ix >>= \case
+                  Nothing -> do
+                    touchByteArray sockAddrs
+                    pure (Left (exception Receive SocketAddressFamily))
+                  Just sockAddrInet -> do
+                    let !msg = Message
+                          (socketAddressInternetToEndpoint sockAddrInet)
+                          (PM.indexUnliftedArray msgs ix)
+                    PM.writeArray finalMsgs ix msg
+                    go (ix - 1)
+                else do
+                  touchByteArray sockAddrs
+                  fmap Right (PM.unsafeFreezeArray finalMsgs)
+          go (len - 1)
+      else pure (Left (exception Receive SocketAddressSize))
 
 -- Although this is a shim for recvmmsg, it is still better than calling
 -- receive repeatedly since it avoids unneeded calls to the event
 -- manager. This is guaranteed to return at least one message.
+--
+-- This function is currently unused. It is being left here so that,
+-- when cross-platform compatibility is someday handled, this will
+-- be available for platforms that do not provide recvmmsg.
 receiveManyShim :: Socket -> Int -> Int -> IO (Either SocketException (Array Message))
 receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
   debug "receiveMany: about to wait"
@@ -320,3 +356,17 @@ be handled gracefully.
 > unhandled action = action >>= either throwIO pure
 
 -}
+
+
+touchByteArray :: ByteArray -> IO ()
+touchByteArray (PM.ByteArray x) = touchByteArray# x
+
+touchByteArray# :: ByteArray# -> IO ()
+touchByteArray# x = IO $ \s -> case touch# x s of s' -> (# s', () #)
+
+cuintToInt :: CUInt -> Int
+cuintToInt = fromIntegral
+
+intToCUInt :: Int -> CUInt
+intToCUInt = fromIntegral
+
