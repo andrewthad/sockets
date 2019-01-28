@@ -97,7 +97,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                     pure (Right cleanPort)
                   Nothing -> do
                     S.uninterruptibleErrorlessClose fd
-                    pure (Left SocketAddressFamily)
+                    pure (Left (SocketAddressFamily (-1)))
                 else do
                   S.uninterruptibleErrorlessClose fd
                   pure (Left SocketAddressSize)
@@ -176,7 +176,7 @@ receive (Socket !fd) !maxSz = do
             shrinkMutableByteArray marr (csizeToInt recvSz)
             arr <- PM.unsafeFreezeByteArray marr
             pure $ Right (Message (socketAddressInternetToEndpoint sockAddrInet) arr)
-          Nothing -> pure (Left SocketAddressFamily)
+          Nothing -> pure (Left (SocketAddressFamily (-1)))
         else pure (Left SocketAddressSize)
       else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
 
@@ -184,6 +184,8 @@ receive (Socket !fd) !maxSz = do
 --   byte arrays. When there are many datagrams present on the receive
 --   buffer, this is more efficient than calling 'receive' repeatedly. The
 --   array is guaranteed to have at least one message.
+--
+--   The byte arrays in the resulting messages are always pinned.
 receiveMany ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum number of datagrams to receive
@@ -205,10 +207,10 @@ receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
           finalMsgs <- PM.newArray len errorThunk
           let go !ix = if ix >= 0
                 then S.indexSocketAddressInternet sockaddrBase ix >>= \case
-                  Nothing -> do
+                  Left fam -> do
                     touchByteArray sockAddrs
-                    pure (Left SocketAddressFamily)
-                  Just sockAddrInet -> do
+                    pure (Left (SocketAddressFamily fam))
+                  Right sockAddrInet -> do
                     let !msg = Message
                           (socketAddressInternetToEndpoint sockAddrInet)
                           (PM.indexUnliftedArray msgs ix)
@@ -239,7 +241,11 @@ receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
   -- exception.
   let go !ix = if ix < maxDatagrams
         then do
-          marr <- PM.newByteArray maxSz
+          -- This does not need to allocate pinned memory for
+          -- the call to recvfrom to work correctly. It allocates
+          -- pinned memory so that its behavior is consistent with
+          -- that of receiveManyNative.
+          marr <- PM.newPinnedByteArray maxSz
           e <- S.uninterruptibleReceiveFromMutableByteArray fd marr 0
             (intToCSize maxSz) (L.truncate) S.sizeofSocketAddressInternet
           case e of
@@ -257,7 +263,7 @@ receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
                     let !msg = Message (socketAddressInternetToEndpoint sockAddrInet) arr
                     PM.writeArray msgs ix msg
                     go (ix + 1)
-                  Nothing -> pure (Left SocketAddressFamily)
+                  Nothing -> pure (Left (SocketAddressFamily (-1)))
                 else pure (Left SocketAddressSize)
               else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
         else do

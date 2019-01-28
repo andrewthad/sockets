@@ -25,10 +25,11 @@ data SocketException
     -- ^ The socket address was not the expected size. This exception
     --   indicates a bug in this library or (less likely) in the
     --   operating system.
-  | SocketAddressFamily
+  | SocketAddressFamily !CInt
     -- ^ The socket address had an unexpected family. This exception
     --   indicates a bug in this library or (less likely) in the
-    --   operating system.
+    --   operating system. The int argument is the actual family
+    --   found in the socket address.
   | OptionValueSize
     -- ^ The option value was not the expected size. This exception
     --   indicates a bug in this library or (less likely) in the

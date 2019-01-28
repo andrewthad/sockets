@@ -98,7 +98,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                       pure (Right cleanActualPort)
                     Nothing -> do
                       _ <- S.uninterruptibleClose fd
-                      pure (Left SocketAddressFamily)
+                      pure (Left (SocketAddressFamily (-1)))
                   else do
                     _ <- S.uninterruptibleClose fd
                     pure (Left SocketAddressSize)
@@ -147,7 +147,7 @@ internalAccepted wrap (Listener !lst) f = do
               gracefulClose acpt a
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
-            pure (Left SocketAddressFamily)
+            pure (Left (SocketAddressFamily (-1)))
         else do
           _ <- S.uninterruptibleClose acpt
           pure (Left SocketAddressSize)
