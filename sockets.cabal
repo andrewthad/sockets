@@ -13,6 +13,11 @@ copyright: 2019 Andrew Martin
 category: Network
 extra-source-files: CHANGELOG.md
 
+flag mmsg
+  manual: True
+  description: Use sendmmsg and recvmmsg 
+  default: False
+
 flag debug
   manual: True
   description: Print debug output 
@@ -28,6 +33,8 @@ library
     Socket.Datagram.IPv4.Undestined
     Socket.Stream.IPv4
   other-modules:
+    Socket.Datagram.IPv4.Undestined.Multiple
+    Socket.Datagram.IPv4.Undestined.Internal
     Socket.Debug
     Socket.IPv4
     Socket
@@ -41,6 +48,10 @@ library
     hs-source-dirs: src-debug
   else
     hs-source-dirs: src-production
+  if flag(mmsg)
+    hs-source-dirs: src-mmsg
+  else
+    hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
   ghc-options: -O2 -Wall
 
