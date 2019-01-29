@@ -37,6 +37,10 @@ data SocketException
   | NegativeBytesRequested
     -- ^ The user requested a negative number of bytes in a call
     --   to a receive function.
+  | ReceptionAbandoned
+    -- ^ This happens when the @Unless@ variant of a function is
+    --   used and the @STM@ action completes before the socket is
+    --   ready for a read.
   | RemoteNotShutdown
     -- ^ The remote end sent more data when it was expected to send
     --   a shutdown.

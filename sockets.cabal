@@ -40,9 +40,10 @@ library
     Socket
   build-depends:
     , base >= 4.11.1.0 && < 5
+    , ip >= 1.4.1
     , posix-api >= 0.2
     , primitive >= 0.6.4
-    , ip >= 1.4.1
+    , stm >= 2.4
   hs-source-dirs: src
   if flag(debug)
     hs-source-dirs: src-debug

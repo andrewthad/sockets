@@ -19,6 +19,7 @@ module Socket.Datagram.IPv4.Undestined
   , receive
   , receiveMutableByteArraySlice_
   , receiveMany
+  , receiveManyUnless
     -- * Exceptions
   , SocketException(..)
     -- * Examples
@@ -36,7 +37,7 @@ import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (SocketException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..),Socket(..))
-import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany)
+import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany,receiveManyUnless)
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..))
 

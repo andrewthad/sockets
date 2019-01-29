@@ -6,10 +6,14 @@
 {-# language UnboxedTuples #-}
 module Socket.Datagram.IPv4.Undestined.Multiple
   ( receiveMany
+  , receiveManyUnless
   ) where
 
-import Control.Concurrent (threadWaitWrite,threadWaitRead)
+import Control.Applicative ((<|>))
+import Control.Monad.STM (STM,atomically)
+import Control.Concurrent (threadWaitWrite,threadWaitRead,threadWaitReadSTM)
 import Control.Exception (mask,onException)
+import Data.Functor (($>))
 import Data.Primitive (ByteArray,MutableByteArray(..),Array)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
@@ -39,7 +43,30 @@ receiveMany ::
   -> Int -- ^ Maximum number of datagrams to receive
   -> Int -- ^ Maximum size of each datagram to receive
   -> IO (Either SocketException (Array Message))
-receiveMany = receiveManyShim
+receiveMany (Socket !fd) !maxDatagrams !maxSz = do
+  debug "receiveMany: about to wait"
+  threadWaitRead fd
+  receiveManyShim fd maxDatagrams maxSz
+
+-- | This has the same behavior as 'receiveMany'. However, it also takes an
+--   'STM' action that it attempts to run while the event manager is waiting
+--   for the socket to be ready for a reads. If the supplied action finishes
+--   first, this abandons the attempt to receive datagrams and returns
+--   @'Left' 'ReceptionAbandoned'@.
+receiveManyUnless :: 
+     Socket -- ^ Socket
+  -> Int -- ^ Maximum number of datagrams to receive
+  -> Int -- ^ Maximum size of each datagram to receive
+  -> STM () -- ^ If this completes, give up on receiving
+  -> IO (Either SocketException (Array Message))
+receiveManyUnless (Socket !fd) !maxDatagrams !maxSz abandon = do
+  debug "receiveMany: about to wait"
+  (isReady,deregister) <- threadWaitReadSTM fd
+  shouldReceive <- atomically ((isReady $> True) <|> (abandon $> False))
+  deregister
+  if shouldReceive
+    then receiveManyShim fd maxDatagrams maxSz
+    else pure (Left ReceptionAbandoned)
 
 -- Although this is a shim for recvmmsg, it is still better than calling
 -- receive repeatedly since it avoids unneeded calls to the event
@@ -48,10 +75,8 @@ receiveMany = receiveManyShim
 -- This function is currently unused. It is being left here so that,
 -- when cross-platform compatibility is someday handled, this will
 -- be available for platforms that do not provide recvmmsg.
-receiveManyShim :: Socket -> Int -> Int -> IO (Either SocketException (Array Message))
-receiveManyShim (Socket !fd) !maxDatagrams !maxSz = do
-  debug "receiveMany: about to wait"
-  threadWaitRead fd
+receiveManyShim :: Fd -> Int -> Int -> IO (Either SocketException (Array Message))
+receiveManyShim !fd !maxDatagrams !maxSz = do
   debug "receiveMany: socket is now readable"
   msgs <- PM.newArray maxDatagrams errorThunk
   -- We use MSG_TRUNC so that we are able to figure out whether
