@@ -18,6 +18,37 @@
 -- tells the main thread that enough work has been done. The main thread
 -- prints the total number of elapsed nanoseconds and then exits. This
 -- benchmark does not attempt to close the sockets before exiting.
+--
+-- Here are some interesting results of running this benchmark on a
+-- Dell Precision 7510 (Intel Xeon CPU E3-1505M, 4 physical cores,
+-- 8 virtual cores with hyperthreading, 32GB memory):
+--
+-- * Wall-clock time:
+--   * Non-threaded runtime: 37s
+--   * Threaded runtime:
+--     * N1: 12s
+--     * N2: 7.5s
+--     * N4: 19s
+-- * Memory:
+--   * Total Allocations: 4400MB
+--   * Copied: 3MB
+--   * Maximum Residency: 0.2MB
+-- * Productivity: 99.8%
+--
+-- These were measured with these constants set:
+-- 
+-- * Participants: 64
+-- * Payload Size: 32 words
+-- * Total Receives: 3000000
+--
+-- The memory and productivity numbers do not change much based on
+-- the number of capabilities, the nursery size, or the parallel GC
+-- settings. In the event-manager-benchmarks repository, I've measured
+-- that every call to threadWaitRead causes around 1KB of allocations
+-- to happen. This sockets benchmark is certain to call threadWaitRead and
+-- unlikely to call threadWaitWrite, so the 3M receives are responsible
+-- for 3GB of allocations. It is unclear whether or not improvements
+-- to the event manager would result in a tangible gain here.
 
 import Control.Concurrent (forkIO)
 import Control.Exception (Exception)
