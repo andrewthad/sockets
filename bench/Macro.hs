@@ -1,144 +1,141 @@
 {-# language BangPatterns #-}
+{-# language DuplicateRecordFields #-}
+{-# language LambdaCase #-}
+{-# language MagicHash #-}
+{-# language OverloadedStrings #-}
 {-# language ScopedTypeVariables #-}
+{-# language TypeFamilies #-}
+{-# language UnboxedTuples #-}
 
-import Control.Concurrent.Async (concurrently)
+-- This is a benchmark designed to stress both the sockets library
+-- and the GHC event manager. It opens a moderate number of datagram sockets
+-- that each belong to one of two teams: A and B. There is one worker
+-- thread for each socket. The thread sends a datagram to a pseudorandomly
+-- detemined socket on the other team. Then, it waits to receive a datagram
+-- from a socket on the other team. All worker threads repeatedly perform
+-- this task forever. Once a large number N of total receives have occurred,
+-- the lucky worker thread performing the Nth receives fills an MVar that
+-- tells the main thread that enough work has been done. The main thread
+-- prints the total number of elapsed nanoseconds and then exits. This
+-- benchmark does not attempt to close the sockets before exiting.
+
+import Control.Concurrent (forkIO)
 import Control.Exception (Exception)
 import Control.Exception (throwIO)
-import Control.Monad.ST (runST)
-import Data.Primitive (ByteArray)
-import Data.Word (Word16,Word8)
-import GHC.Exts (RealWorld)
-import Test.Tasty
-import Test.Tasty.HUnit
+import Control.Monad (forever,forM_,when)
+import Data.Primitive (PrimArray,MutablePrimArray(..))
+import Data.Primitive.MVar (MVar)
+import Data.Word (Word16)
+import GHC.Clock (getMonotonicTimeNSec)
+import GHC.Exts (RealWorld,Int(I#))
+import GHC.IO (IO(..))
+import Socket.Datagram.IPv4.Undestined (Endpoint(..))
+import System.Entropy (getEntropy)
 
-import qualified Socket.Datagram.IPv4.Undestined as DIU
-import qualified Socket.Stream.IPv4 as SI
-import qualified GHC.Exts as E
+import qualified Data.ByteString as B
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.MVar as PM
+import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
+import qualified Socket.Datagram.IPv4.Undestined as DIU
 
 main :: IO ()
 main = do
-  [duration] <- getArgs
-  newIORef True
-  complete <- newPrimArray 1
-  replicateM_ (take
-  
+  done <- PM.newEmptyMVar
+  recvCounter <- PM.newPrimArray 1
+  PM.writePrimArray recvCounter 0 0
+  socketsCounterA <- PM.newPrimArray 1
+  PM.writePrimArray socketsCounterA 0 0
+  socketsCounterB <- PM.newPrimArray 1
+  PM.writePrimArray socketsCounterB 0 0
+  socketsA <- PM.newPrimArray participants
+  socketsB <- PM.newPrimArray participants
+  socketsMVarA <- PM.newEmptyMVar
+  socketsMVarB <- PM.newEmptyMVar
+  forM_ (enumFromTo 0 (participants - 1)) $ \ix -> do
+    forkIO $ worker ix done recvCounter socketsCounterA socketsA socketsMVarA socketsMVarB
+  forM_ (enumFromTo 0 (participants - 1)) $ \ix -> do
+    forkIO $ worker ix done recvCounter socketsCounterB socketsB socketsMVarB socketsMVarA
+  _ <- PM.readMVar socketsMVarA
+  _ <- PM.readMVar socketsMVarB
+  start <- getMonotonicTimeNSec
+  PM.takeMVar done
+  end <- getMonotonicTimeNSec
+  print (end - start)
 
 participants :: Int
-participants = 128
+participants = 64
+
+-- This is in units of machine words
+payloadSize :: Int
+payloadSize = 32
 
 totalReceives :: Int
-totalReceives = 1000000
+totalReceives = 3000000
 
 -- The PrimArray must be of length @participants@.
 worker :: 
      Int -- ^ Worker identifier
+  -> MVar RealWorld () -- ^ Used to signal that enough receives have happened
+  -> MutablePrimArray RealWorld Int -- ^ Counter of total receives, singleton array
   -> MutablePrimArray RealWorld Int -- ^ Counter of opened sockets, singleton array
-  -> MutablePrimArray RealWorld Int -- ^ Counter of total sends, singleton array
   -> MutablePrimArray RealWorld Word16 -- ^ Ports used by local team
-  -> MVar (PrimArray Word16) -- ^ MVar for ports used by local team
-  -> MVar (PrimArray Word16) -- ^ MVar for ports used by remote team
+  -> MVar RealWorld (PrimArray Word16) -- ^ MVar for ports used by local team
+  -> MVar RealWorld (PrimArray Word16) -- ^ MVar for ports used by remote team
   -> IO ()
-worker !ident !counter !locals !mlocals !mremotes = do
-  unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
-    PM.writePrimArray locals ident port
-    increment counter >>= \case
-      True -> PM.unsafeFreezePrimArray locals >>= putMVar mlocals
+worker !ident !done !recvCounter !counter !locals !mlocals !mremotes = do
+  unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock myPort -> do
+    buf@(PM.MutablePrimArray buf#) <- PM.newPrimArray payloadSize
+    seedByteString <- getEntropy (payloadSize * PM.sizeOf (undefined :: Int))
+    let seedByteArray = E.fromList (B.unpack seedByteString)
+    PM.copyByteArray (PM.MutableByteArray buf#) 0 seedByteArray 0 (payloadSize * PM.sizeOf (undefined :: Int))
+    PM.writePrimArray locals ident myPort
+    incrementWorkerCounter counter >>= \case
+      True -> PM.unsafeFreezePrimArray locals >>= PM.putMVar mlocals
       False -> pure ()
-    remotes <- readMVar mremotes
-    act 
+    remotes <- PM.readMVar mremotes
+    act sock buf remotes recvCounter done
 
 act ::
      DIU.Socket -- Socket
-  -> MutableByteArray RealWorld -- Buffer for receives
+  -> MutablePrimArray RealWorld Int -- Buffer for receives
   -> PrimArray Word16 -- Ports used by remote team
+  -> MutablePrimArray RealWorld Int -- Receive counter, singleton array
+  -> MVar RealWorld () -- Signal that we are finished
   -> IO ()
-act !sock !buf !remotes = case act of
-  DIU.send sock _ _ _ _
-  DIU.send sock _ _ _ _
+act !sock !buf@(MutablePrimArray buf#) !remotes !counter !done = forever $ do
+  n <- scramble buf
+  let remote = PM.indexPrimArray remotes (mod n participants)
+  unhandled $ DIU.sendMutableByteArray sock (Endpoint {port = remote, address = IPv4.loopback})
+    (PM.MutableByteArray buf#) 0 (payloadSize * PM.sizeOf (undefined :: Int))
+  recvSz <- unhandled $ DIU.receiveMutableByteArraySlice_ sock (PM.MutableByteArray buf#) 0
+    (payloadSize * PM.sizeOf (undefined :: Int))
+  when (recvSz /= payloadSize * PM.sizeOf (undefined :: Int)) $ do
+    fail "bad receive in act"
+  incrementReceiveCounter counter >>= \case
+    True -> PM.putMVar done ()
+    False -> pure ()
+
+scramble :: MutablePrimArray RealWorld Int -> IO Int
+scramble arr = go 0 0x36b0b1c47d1ba5e1 0x55109de6a59394b3
+  where
+  go !ix !acc1 !acc2 = if ix < payloadSize
+    then do
+      v <- PM.readPrimArray arr ix
+      PM.writePrimArray arr ix ((v + acc1) * acc2)
+      go (ix + 1) acc2 v
+    else pure (acc1 + acc2)
 
 -- Returns true if the value of the counter reached the total
 -- number of participants.
 incrementWorkerCounter :: MutablePrimArray RealWorld Int -> IO Bool
-incrementWorkerCounter (MutablePrimArray arr) = IO $ \s0 -> case fetchAddIntArray arr 0# 1# s0 of
+incrementWorkerCounter (MutablePrimArray arr) = IO $ \s0 -> case E.fetchAddIntArray# arr 0# 1# s0 of
   (# s1, i #) -> (# s1, I# i == participants - 1 #)
 
 incrementReceiveCounter :: MutablePrimArray RealWorld Int -> IO Bool
-incrementReceiveCounter (MutablePrimArray arr) = IO $ \s0 -> case fetchAddIntArray arr 0# 1# s0 of
+incrementReceiveCounter (MutablePrimArray arr) = IO $ \s0 -> case E.fetchAddIntArray# arr 0# 1# s0 of
   (# s1, i #) -> (# s1, I# i == totalReceives - 1 #)
-
-tests :: TestTree
-tests = testGroup "socket"
-  [ testGroup "datagram"
-    [ testGroup "ipv4"
-      [ testGroup "undestined"
-        [ testCase "A" testDatagramUndestinedA
-        ]
-      ]
-    ]
-  , testGroup "stream"
-    [ testGroup "ipv4"
-      [ testCase "A" testStreamA
-      ]
-    ]
-  ]
 
 unhandled :: Exception e => IO (Either e a) -> IO a
 unhandled action = action >>= either throwIO pure
-
-testDatagramUndestinedA :: Assertion
-testDatagramUndestinedA = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  (port,received) <- concurrently (sender m) (receiver m)
-  received @=? (DIU.Endpoint IPv4.loopback port, message)
-  where
-  message = E.fromList [0,1,2,3] :: ByteArray
-  sz = PM.sizeofByteArray message
-  sender :: PM.MVar RealWorld Word16 -> IO Word16
-  sender m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
-    dstPort <- PM.takeMVar m
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message 0 sz
-    pure srcPort
-  receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Endpoint,ByteArray)
-  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
-    PM.putMVar m port
-    unhandled $ DIU.receive sock sz
-
--- This test involves a made up protocol that goes like this:
--- The sender always starts by sending the length of the rest
--- of the payload as a native-endian encoded machine-sized int.
--- (This could only ever work for a machine that is communicating
--- with itself). Then, it sends a bytearray of that specified
--- length. Then, both ends are expected to shutdown their sides
--- of the connection.
-testStreamA :: Assertion
-testStreamA = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  ((),received) <- concurrently (sender m) (receiver m)
-  received @=? message
-  where
-  message = E.fromList (enumFromTo 0 (100 :: Word8)) :: ByteArray
-  sz = PM.sizeofByteArray message
-  szb = runST $ do
-    marr <- PM.newByteArray (PM.sizeOf (undefined :: Int))
-    PM.writeByteArray marr 0 sz
-    PM.unsafeFreezeByteArray marr
-  sender :: PM.MVar RealWorld Word16 -> IO ()
-  sender m = do
-    dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) $ \conn -> do
-      unhandled $ SI.sendByteArray conn szb
-      unhandled $ SI.sendByteArray conn message
-  receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
-  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
-    PM.putMVar m port
-    unhandled $ SI.withAccepted listener $ \conn _ -> do
-      serializedSize <- unhandled $ SI.receiveByteArray conn (PM.sizeOf (undefined :: Int))
-      let theSize = PM.indexByteArray serializedSize 0 :: Int
-      result <- unhandled $ SI.receiveByteArray conn theSize
-      pure result
-
-
 

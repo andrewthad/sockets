@@ -16,6 +16,7 @@ module Socket.Datagram.IPv4.Undestined
   , withSocket
     -- * Communicate
   , send
+  , sendMutableByteArray
   , receive
   , receiveMutableByteArraySlice_
   , receiveMany
@@ -139,6 +140,46 @@ send (Socket !s) !theRemote !thePayload !off !len = do
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send: success")
+        pure (Right ())
+      else pure (Left (SentMessageTruncated (csizeToInt sz)))
+
+-- | Send a slice of a bytearray to the specified endpoint.
+sendMutableByteArray ::
+     Socket -- ^ Socket
+  -> Endpoint -- ^ Remote IPv4 address and port
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Lenth of slice into buffer
+  -> IO (Either SocketException ())
+sendMutableByteArray (Socket !s) !theRemote !thePayload !off !len = do
+  debug ("send mutable: about to send to " ++ show theRemote)
+  e1 <- S.uninterruptibleSendToMutableByteArray s thePayload
+    (intToCInt off)
+    (intToCSize len)
+    mempty
+    (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
+  debug ("send mutable: just sent to " ++ show theRemote)
+  case e1 of
+    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
+      then do
+        debug ("send mutable: waiting to for write ready to send to " ++ show theRemote)
+        threadWaitWrite s
+        e2 <- S.uninterruptibleSendToMutableByteArray s thePayload
+          (intToCInt off)
+          (intToCSize len)
+          mempty
+          (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
+        case e2 of
+          Left err2 -> do
+            debug ("send mutable: encountered error after sending")
+            pure (Left (errorCode err2))
+          Right sz -> if csizeToInt sz == len
+            then pure (Right ())
+            else pure (Left (SentMessageTruncated (csizeToInt sz)))
+      else pure (Left (errorCode err1))
+    Right sz -> if csizeToInt sz == len
+      then do
+        debug ("send mutable: success")
         pure (Right ())
       else pure (Left (SentMessageTruncated (csizeToInt sz)))
 
