@@ -1,9 +1,9 @@
-{-# language BangPatterns #-}
-{-# language RankNTypes #-}
-{-# language DuplicateRecordFields #-}
-{-# language LambdaCase #-}
-{-# language NamedFieldPuns #-}
-{-# language MagicHash #-}
+{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MagicHash             #-}
+{-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE RankNTypes            #-}
 
 module Socket.Stream.IPv4
   ( -- * Types
@@ -28,25 +28,28 @@ module Socket.Stream.IPv4
   , SocketException(..)
   ) where
 
-import Control.Concurrent (ThreadId,threadWaitWrite,threadWaitRead)
-import Control.Concurrent (forkIO,forkIOWithUnmask)
-import Control.Exception (mask,onException)
-import Data.Bifunctor (bimap)
-import Data.Primitive (ByteArray,MutableByteArray(..))
-import Data.Word (Word16)
-import Foreign.C.Error (Errno(..),eAGAIN,eWOULDBLOCK,eINPROGRESS)
-import Foreign.C.Types (CInt,CSize)
-import GHC.Exts (RealWorld,Int(I#),shrinkMutableByteArray#)
-import Socket (SocketException(..))
-import Socket.Debug (debug)
-import Socket.IPv4 (Endpoint(..))
-import System.Posix.Types (Fd)
-import Net.Types (IPv4(..))
+import           Control.Concurrent      (ThreadId, threadWaitRead,
+                                          threadWaitWrite)
+import           Control.Concurrent      (forkIO, forkIOWithUnmask)
+import           Control.Exception       (mask, onException)
+import           Data.Bifunctor          (bimap)
+import           Data.Primitive          (ByteArray, MutableByteArray (..))
+import           Data.Word               (Word16)
+import           Foreign.C.Error         (Errno (..), eAGAIN, eINPROGRESS,
+                                          eWOULDBLOCK)
+import           Foreign.C.Types         (CInt, CSize)
+import           GHC.Exts                (Int (I#), RealWorld,
+                                          shrinkMutableByteArray#)
+import           Net.Types               (IPv4 (..))
+import           Socket                  (SocketException (..))
+import           Socket.Debug            (debug)
+import           Socket.IPv4             (Endpoint (..))
+import           System.Posix.Types      (Fd)
 
 import qualified Control.Monad.Primitive as PM
-import qualified Data.Primitive as PM
-import qualified Linux.Socket as L
-import qualified Posix.Socket as S
+import qualified Data.Primitive          as PM
+import qualified Linux.Socket            as L
+import qualified Posix.Socket            as S
 
 -- | A socket that listens for incomming connections.
 newtype Listener = Listener Fd
@@ -82,7 +85,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
             _ <- S.uninterruptibleClose fd
             debug "withSocket: listen failed with error code"
             pure (Left (errorCode err))
-          Right _ -> do 
+          Right _ -> do
             -- The getsockname is copied from code in Socket.Datagram.IPv4.Undestined.
             -- Consider factoring this out.
             eactualPort <- if specifiedPort == 0
@@ -316,7 +319,7 @@ sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
     else pure (Right ())
 
 -- The length must be greater than zero.
-internalSendMutable :: 
+internalSendMutable ::
      Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
@@ -337,7 +340,7 @@ internalSendMutable (Connection !s) !payload !off !len = do
           mempty
         case e2 of
           Left err2 -> pure (Left (errorCode err2))
-          Right sz -> pure (Right sz)
+          Right sz  -> pure (Right sz)
       else pure (Left (errorCode err1))
     Right sz -> pure (Right sz)
 
@@ -392,7 +395,7 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
   debug "receive: finished reading from stream socket"
   case e of
-    Left err -> pure (Left (errorCode err))
+    Left err     -> pure (Left (errorCode err))
     Right recvSz -> pure (Right (csizeToInt recvSz))
 
 -- | Receive exactly the given number of bytes. If the remote application
@@ -442,7 +445,7 @@ receiveMutableByteArray !conn0 !marr0 = do
 --   shuts down its end of the connection instead of sending any bytes,
 --   this returns
 --   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
-receiveBoundedByteArray :: 
+receiveBoundedByteArray ::
      Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> IO (Either SocketException ByteArray)
@@ -450,7 +453,7 @@ receiveBoundedByteArray !conn !total
   | total > 0 = do
       m <- PM.newByteArray total
       internalReceiveMaximally conn total m 0 >>= \case
-        Left err -> pure (Left err) 
+        Left err -> pure (Left err)
         Right sz -> if sz /= 0
           then do
             shrinkMutableByteArray m sz
@@ -486,4 +489,3 @@ shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
 
 errorCode :: Errno -> SocketException
 errorCode (Errno x) = ErrorCode x
-
