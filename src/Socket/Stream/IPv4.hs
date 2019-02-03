@@ -23,6 +23,7 @@ module Socket.Stream.IPv4
   , sendMutableByteArraySlice
   , receiveByteArray
   , receiveBoundedByteArray
+  , receiveMutableByteArraySlice
   , receiveMutableByteArray
     -- * Exceptions
   , SocketException(..)
@@ -441,6 +442,27 @@ receiveMutableByteArray !conn0 !marr0 = do
         else pure (Left RemoteShutdown)
     else pure (Right ())
 
+-- | Receive up to the given number of bytes, using the given array and
+--   starting at the given offset.
+--   If the remote application shuts down its end of the connection instead of
+--   sending any bytes, this returns
+--   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
+receiveMutableByteArraySlice ::
+     Connection -- ^ Connection
+  -> Int -- ^ Maximum number of bytes to receive
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
+  -> Int -- ^ Offset in the buffer
+  -> IO (Either SocketException Int) -- ^ Either a socket exception or the number of bytes read
+receiveMutableByteArraySlice !conn !total !marr !off
+  | total > 0 =
+      internalReceiveMaximally conn total marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then pure (Right sz)
+          else pure (Left RemoteShutdown)
+  | total == 0 = pure (Right 0)
+  | otherwise = pure (Left NegativeBytesRequested)
+
 -- | Receive up to the given number of bytes. If the remote application
 --   shuts down its end of the connection instead of sending any bytes,
 --   this returns
@@ -452,13 +474,11 @@ receiveBoundedByteArray ::
 receiveBoundedByteArray !conn !total
   | total > 0 = do
       m <- PM.newByteArray total
-      internalReceiveMaximally conn total m 0 >>= \case
+      receiveMutableByteArraySlice conn total m 0 >>= \case
         Left err -> pure (Left err)
-        Right sz -> if sz /= 0
-          then do
-            shrinkMutableByteArray m sz
-            fmap Right (PM.unsafeFreezeByteArray m)
-          else pure (Left RemoteShutdown)
+        Right sz -> do
+          shrinkMutableByteArray m sz
+          Right <$> PM.unsafeFreezeByteArray m
   | total == 0 = pure (Right mempty)
   | otherwise = pure (Left NegativeBytesRequested)
 
