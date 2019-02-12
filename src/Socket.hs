@@ -5,6 +5,7 @@
 
 module Socket
   ( SocketException(..)
+  , SocketUnrecoverableException(..)
   ) where
 
 import Control.Exception (Exception)
@@ -58,3 +59,12 @@ data SocketException
     --   for details about the error code.
   deriving stock (Eq,Show)
   deriving anyclass (Exception)
+
+data SocketUnrecoverableException = SocketUnrecoverableException
+  { modules :: String
+  , function :: String
+  , description :: [String]
+  }
+  deriving stock (Show,Eq)
+  deriving anyclass (Exception)
+

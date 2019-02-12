@@ -7,6 +7,7 @@
 {-# language NamedFieldPuns #-}
 {-# language UnboxedTuples #-}
 
+-- | Internet datagram sockets without a fixed destination.
 module Socket.Datagram.IPv4.Undestined
   ( -- * Types
     Socket(..)
@@ -28,7 +29,7 @@ module Socket.Datagram.IPv4.Undestined
   ) where
 
 import Control.Concurrent (threadWaitWrite,threadWaitRead)
-import Control.Exception (mask,onException)
+import Control.Exception (throwIO,mask,onException)
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
@@ -36,7 +37,7 @@ import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (SocketException(..))
+import Socket (SocketException(..),SocketUnrecoverableException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..),Socket(..))
 import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany,receiveManyUnless)
 import Socket.Debug (debug)
@@ -65,7 +66,10 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
     S.defaultProtocol
   debug ("withSocket: opened socket " ++ show endpoint)
   case e1 of
-    Left err -> pure (Left (errorCode err))
+    Left err -> throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Undestined
+      functionWithSocket
+      ["socket",show endpoint,describeErrorCode err]
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
@@ -75,13 +79,19 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           -- We intentionally discard any exceptions thrown by close. There is
           -- simply nothing that can be done with them.
           S.uninterruptibleErrorlessClose fd
-          pure (Left (errorCode err))
+          throwIO $ SocketUnrecoverableException
+            moduleSocketDatagramIPv4Undestined
+            functionWithSocket
+            ["bind",show endpoint,describeErrorCode err]
         Right _ -> do
           eactualPort <- if specifiedPort == 0
             then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
               Left err -> do
                 S.uninterruptibleErrorlessClose fd
-                pure (Left (errorCode err))
+                throwIO $ SocketUnrecoverableException
+                  moduleSocketDatagramIPv4Undestined
+                  functionWithSocket
+                  ["getsockname",show endpoint,describeErrorCode err]
               Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
                   Just S.SocketAddressInternet{port = actualPort} -> do
@@ -90,17 +100,26 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                     pure (Right cleanPort)
                   Nothing -> do
                     S.uninterruptibleErrorlessClose fd
-                    pure (Left (SocketAddressFamily (-1)))
+                    throwIO $ SocketUnrecoverableException
+                      moduleSocketDatagramIPv4Undestined
+                      functionWithSocket
+                      ["getsockname",show endpoint,"non-internet socket family"]
                 else do
                   S.uninterruptibleErrorlessClose fd
-                  pure (Left SocketAddressSize)
+                  throwIO $ SocketUnrecoverableException
+                    moduleSocketDatagramIPv4Undestined
+                    functionWithSocket
+                    ["getsockname",show endpoint,"sockaddr size"]
             else pure (Right specifiedPort)
           case eactualPort of
             Left err -> pure (Left err)
             Right actualPort -> do
               a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleErrorlessClose fd)
               S.uninterruptibleClose fd >>= \case
-                Left err -> pure (Left (errorCode err))
+                Left err -> throwIO $ SocketUnrecoverableException
+                  moduleSocketDatagramIPv4Undestined
+                  functionWithSocket
+                  ["close",show endpoint,describeErrorCode err]
                 Right _ -> pure (Right a)
 
 -- | Send a slice of a bytearray to the specified endpoint.
@@ -132,11 +151,17 @@ send (Socket !s) !theRemote !thePayload !off !len = do
         case e2 of
           Left err2 -> do
             debug ("send: encountered error after sending")
-            pure (Left (errorCode err2))
+            throwIO $ SocketUnrecoverableException
+              moduleSocketDatagramIPv4Undestined
+              functionSend
+              [show theRemote,describeErrorCode err2]
           Right sz -> if csizeToInt sz == len
             then pure (Right ())
             else pure (Left (SentMessageTruncated (csizeToInt sz)))
-      else pure (Left (errorCode err1))
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketDatagramIPv4Undestined
+        functionSend
+        [show theRemote,describeErrorCode err1]
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send: success")
@@ -172,11 +197,17 @@ sendMutableByteArray (Socket !s) !theRemote !thePayload !off !len = do
         case e2 of
           Left err2 -> do
             debug ("send mutable: encountered error after sending")
-            pure (Left (errorCode err2))
+            throwIO $ SocketUnrecoverableException
+              moduleSocketDatagramIPv4Undestined
+              functionSendMutableByteArray
+              ["second",show theRemote,describeErrorCode err2]
           Right sz -> if csizeToInt sz == len
             then pure (Right ())
             else pure (Left (SentMessageTruncated (csizeToInt sz)))
-      else pure (Left (errorCode err1))
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketDatagramIPv4Undestined
+        functionSendMutableByteArray
+        ["first",show theRemote,describeErrorCode err1]
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send mutable: success")
@@ -201,7 +232,10 @@ receive (Socket !fd) !maxSz = do
     (intToCSize maxSz) (L.truncate) S.sizeofSocketAddressInternet
   debug "receive: finished reading from socket"
   case e of
-    Left err -> pure (Left (errorCode err))
+    Left err -> throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Undestined
+      functionReceive
+      [describeErrorCode err]
     Right (sockAddrRequiredSz,sockAddr,recvSz) -> if csizeToInt recvSz <= maxSz
       then if sockAddrRequiredSz == S.sizeofSocketAddressInternet
         then case S.decodeSocketAddressInternet sockAddr of
@@ -230,7 +264,10 @@ receiveMutableByteArraySlice_ (Socket !fd) !buf !off !maxSz = do
   -- exception.
   e <- S.uninterruptibleReceiveFromMutableByteArray_ fd buf (intToCInt off) (intToCSize maxSz) (L.truncate)
   case e of
-    Left err -> pure (Left (errorCode err))
+    Left err -> throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Undestined
+      functionReceiveMutableByteArray
+      [describeErrorCode err]
     Right recvSz -> if csizeToInt recvSz <= maxSz
       then pure (Right (csizeToInt recvSz))
       else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
@@ -302,4 +339,25 @@ intToCSize = fromIntegral
 
 csizeToInt :: CSize -> Int
 csizeToInt = fromIntegral
+
+moduleSocketDatagramIPv4Undestined :: String
+moduleSocketDatagramIPv4Undestined = "Socket.Datagram.IPv4.Undestined"
+
+functionReceive :: String
+functionReceive = "receive"
+
+functionSend :: String
+functionSend = "send"
+
+functionSendMutableByteArray :: String
+functionSendMutableByteArray = "sendMutableByteArray"
+
+functionReceiveMutableByteArray :: String
+functionReceiveMutableByteArray = "receiveMutableByteArray"
+
+functionWithSocket :: String
+functionWithSocket = "withSocket"
+
+describeErrorCode :: Errno -> String
+describeErrorCode (Errno e) = "error code " ++ show e
 

@@ -31,6 +31,7 @@ flag example
 library
   exposed-modules:
     Socket.Datagram.IPv4.Undestined
+    Socket.Datagram.IPv4.Spoof
     Socket.Stream.IPv4
   other-modules:
     Socket.Datagram.IPv4.Undestined.Multiple
@@ -54,7 +55,7 @@ library
   else
     hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-to-file -ddump-simpl -dsuppress-all
 
 test-suite test
   type: exitcode-stdio-1.0

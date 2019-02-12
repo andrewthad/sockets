@@ -12,6 +12,7 @@ import Test.Tasty
 import Test.Tasty.HUnit
 
 import qualified Socket.Datagram.IPv4.Undestined as DIU
+import qualified Socket.Datagram.IPv4.Spoof as DIS
 import qualified Socket.Stream.IPv4 as SI
 import qualified GHC.Exts as E
 import qualified Data.Primitive as PM
@@ -29,6 +30,9 @@ tests = testGroup "socket"
         [ testCase "A" testDatagramUndestinedA
         , testCase "B" testDatagramUndestinedB
         , testCase "C" testDatagramUndestinedC
+        ]
+      , testGroup "spoof"
+        [ testCase "A" testDatagramSpoofA
         ]
       ]
     ]
@@ -164,4 +168,30 @@ testStreamA = do
       result <- unhandled $ SI.receiveByteArray conn theSize
       pure result
 
-
+-- Here, the sender spoofs its ip address and port.
+testDatagramSpoofA :: Assertion
+testDatagramSpoofA = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m n) (receiver m n)
+  received @=? DIU.Message
+    (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+    (E.fromList (replicate sz (3 :: Word8)))
+  where
+  sz = 16
+  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO ()
+  sender m n = unhandled $ DIS.withSocket $ \sock -> do
+    dstPort <- PM.takeMVar m
+    marr <- PM.newByteArray sz
+    PM.setByteArray marr 0 sz (3 :: Word8)
+    unhandled $ DIS.sendMutableByteArray sock
+      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+      (DIU.Endpoint IPv4.loopback dstPort)
+      marr 0 sz
+    PM.putMVar n ()
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO DIU.Message
+  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    PM.takeMVar n
+    unhandled $ DIU.receive sock 500
+      
