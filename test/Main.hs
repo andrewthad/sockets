@@ -33,6 +33,7 @@ tests = testGroup "socket"
         ]
       , testGroup "spoof"
         [ testCase "A" testDatagramSpoofA
+        , testCase "B" testDatagramSpoofB
         ]
       ]
     ]
@@ -172,26 +173,63 @@ testStreamA = do
 testDatagramSpoofA :: Assertion
 testDatagramSpoofA = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
-  ((),received) <- concurrently (sender m n) (receiver m n)
+  ((),received) <- concurrently (sender m) (receiver m)
   received @=? DIU.Message
     (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
-    (E.fromList (replicate sz (3 :: Word8)))
+    payload
   where
   sz = 16
-  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO ()
-  sender m n = unhandled $ DIS.withSocket $ \sock -> do
+  payload = E.fromList (enumFromTo (0 :: Word8) (fromIntegral sz - 1))
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = unhandled $ DIS.withSocket $ \sock -> do
     dstPort <- PM.takeMVar m
     marr <- PM.newByteArray sz
-    PM.setByteArray marr 0 sz (3 :: Word8)
+    PM.copyByteArray marr 0 payload 0 sz
     unhandled $ DIS.sendMutableByteArray sock
       (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
       (DIU.Endpoint IPv4.loopback dstPort)
       marr 0 sz
-    PM.putMVar n ()
-  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO DIU.Message
-  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
+  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    PM.takeMVar n
     unhandled $ DIU.receive sock 500
       
+-- Here, the sender spoofs its ip address and port twice, picking a
+-- different port each time.
+testDatagramSpoofB :: Assertion
+testDatagramSpoofB = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  received @=?
+    ( DIU.Message
+      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+      payloadA
+    , DIU.Message
+      (DIU.Endpoint (IPv4.fromOctets 9 8 7 6) 59999)
+      payloadB
+    )
+  where
+  sz = 16
+  payloadA = E.fromList (enumFromTo (1 :: Word8) (fromIntegral sz))
+  payloadB = E.fromList (enumFromTo (2 :: Word8) (fromIntegral sz + 1))
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = unhandled $ DIS.withSocket $ \sock -> do
+    dstPort <- PM.takeMVar m
+    marrA <- PM.newByteArray sz
+    marrB <- PM.newByteArray sz
+    PM.copyByteArray marrA 0 payloadA 0 sz
+    PM.copyByteArray marrB 0 payloadB 0 sz
+    unhandled $ DIS.sendMutableByteArray sock
+      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+      (DIU.Endpoint IPv4.loopback dstPort)
+      marrA 0 sz
+    unhandled $ DIS.sendMutableByteArray sock
+      (DIU.Endpoint (IPv4.fromOctets 9 8 7 6) 59999)
+      (DIU.Endpoint IPv4.loopback dstPort)
+      marrB 0 sz
+  receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Message,DIU.Message)
+  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    msg1 <- unhandled $ DIU.receive sock 500
+    msg2 <- unhandled $ DIU.receive sock 500
+    return (msg1,msg2)
