@@ -1,15 +1,41 @@
 {-# language BangPatterns #-}
+{-# language DataKinds #-}
 {-# language DeriveAnyClass #-}
 {-# language DerivingStrategies #-}
 {-# language DuplicateRecordFields #-}
+{-# language GADTs #-}
+{-# language KindSignatures #-}
 
 module Socket
   ( SocketException(..)
   , SocketUnrecoverableException(..)
+  , Direction(..)
+  , Interruptibility(..)
+  , Forkedness(..)
+  , cgetsockname 
+  , cgetsockopt
+  , cclose 
+  , crecv 
+  , cshutdown
+  , nonInternetSocketFamily
+  , functionWithAccepted
+  , functionWithConnection
+  , functionWithListener
+  , functionGracefulClose
+  , socketAddressSize
   ) where
 
-import Control.Exception (Exception)
+import Control.Exception (Exception(..))
+import Data.Kind (Type)
 import Foreign.C.Types (CInt)
+
+import qualified Data.List as L
+
+data Direction = Send | Receive
+
+data Interruptibility = Interruptible | Uninterruptible
+
+data Forkedness = Forked | Unforked
 
 -- | Represents any unexpected behaviors that a function working on a
 --   socket, connection, or listener can exhibit.
@@ -66,5 +92,40 @@ data SocketUnrecoverableException = SocketUnrecoverableException
   , description :: [String]
   }
   deriving stock (Show,Eq)
-  deriving anyclass (Exception)
 
+instance Exception SocketUnrecoverableException where
+  displayException (SocketUnrecoverableException m f d) =
+    m ++ "." ++ f ++ ": [" ++ L.intercalate "," d ++ "]"
+
+cgetsockname :: String
+cgetsockname = "getsockname"
+
+cgetsockopt :: String
+cgetsockopt = "getsockopt"
+
+cclose :: String
+cclose = "getsockname"
+
+crecv :: String
+crecv = "recv"
+
+cshutdown :: String
+cshutdown = "shutdown"
+
+functionGracefulClose :: String
+functionGracefulClose = "gracefulClose"
+
+nonInternetSocketFamily :: String
+nonInternetSocketFamily = "non-internet socket family"
+
+functionWithAccepted :: String
+functionWithAccepted = "withAccepted"
+
+functionWithConnection :: String
+functionWithConnection = "withConnection"
+
+functionWithListener :: String
+functionWithListener = "withListener"
+
+socketAddressSize :: String
+socketAddressSize = "socket address size"

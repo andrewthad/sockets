@@ -11,13 +11,13 @@ import GHC.Exts (RealWorld)
 import Test.Tasty
 import Test.Tasty.HUnit
 
-import qualified Socket.Datagram.IPv4.Undestined as DIU
-import qualified Socket.Datagram.IPv4.Spoof as DIS
-import qualified Socket.Stream.IPv4 as SI
-import qualified GHC.Exts as E
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.MVar as PM
+import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
+import qualified Socket.Datagram.IPv4.Spoof as DIS
+import qualified Socket.Datagram.IPv4.Undestined as DIU
+import qualified Socket.Stream.IPv4 as SI
 
 main :: IO ()
 main = defaultMain tests

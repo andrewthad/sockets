@@ -1,9 +1,10 @@
-{-# LANGUAGE BangPatterns          #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE LambdaCase            #-}
-{-# LANGUAGE MagicHash             #-}
-{-# LANGUAGE NamedFieldPuns        #-}
-{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Socket.Stream.IPv4
   ( -- * Types
@@ -26,31 +27,41 @@ module Socket.Stream.IPv4
   , receiveMutableByteArraySlice
   , receiveMutableByteArray
     -- * Exceptions
-  , SocketException(..)
+  , SendException(..)
+  , ReceiveException(..)
+  , ConnectException(..)
+  , ListenException(..)
+  , CloseException(..)
+  , Interruptibility(..)
   ) where
 
-import           Control.Concurrent      (ThreadId, threadWaitRead,
-                                          threadWaitWrite)
-import           Control.Concurrent      (forkIO, forkIOWithUnmask)
-import           Control.Exception       (mask, onException)
-import           Data.Bifunctor          (bimap)
-import           Data.Primitive          (ByteArray, MutableByteArray (..))
-import           Data.Word               (Word16)
-import           Foreign.C.Error         (Errno (..), eAGAIN, eINPROGRESS,
-                                          eWOULDBLOCK)
-import           Foreign.C.Types         (CInt, CSize)
-import           GHC.Exts                (Int (I#), RealWorld,
-                                          shrinkMutableByteArray#)
-import           Net.Types               (IPv4 (..))
-import           Socket                  (SocketException (..))
-import           Socket.Debug            (debug)
-import           Socket.IPv4             (Endpoint (..))
-import           System.Posix.Types      (Fd)
+import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
+import Control.Concurrent (forkIO, forkIOWithUnmask)
+import Control.Exception (mask, onException, throwIO)
+import Data.Bifunctor (bimap,first)
+import Data.Primitive (ByteArray, MutableByteArray(..))
+import Data.Word (Word16)
+import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE)
+import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
+import Foreign.C.Error (eADDRINUSE)
+import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
+import Foreign.C.Types (CInt, CSize)
+import GHC.Exts (Int(I#), RealWorld, shrinkMutableByteArray#)
+import Net.Types (IPv4(..))
+import Socket (SocketException(..),Interruptibility(..),Forkedness(..))
+import Socket (cgetsockname,cclose)
+import Socket (SocketUnrecoverableException(..))
+import Socket.Stream (ConnectException(..),ListenException(..),AcceptException(..))
+import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
+import Socket.Debug (debug)
+import Socket.IPv4 (Endpoint(..),describeEndpoint)
+import System.Posix.Types(Fd)
 
 import qualified Control.Monad.Primitive as PM
-import qualified Data.Primitive          as PM
-import qualified Linux.Socket            as L
-import qualified Posix.Socket            as S
+import qualified Data.Primitive as PM
+import qualified Linux.Socket as L
+import qualified Posix.Socket as S
+import qualified Socket as SCK
 
 -- | A socket that listens for incomming connections.
 newtype Listener = Listener Fd
@@ -61,23 +72,23 @@ newtype Connection = Connection Fd
 withListener ::
      Endpoint
   -> (Listener -> Word16 -> IO a)
-  -> IO (Either SocketException a)
+  -> IO (Either ListenException a)
 withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
-  debug ("withSocket: opening listener " ++ show endpoint)
+  debug ("withSocket: opening listener " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
-  debug ("withSocket: opened listener " ++ show endpoint)
+  debug ("withSocket: opened listener " ++ describeEndpoint endpoint)
   case e1 of
-    Left err -> pure (Left (errorCode err))
+    Left err -> handleSocketListenException SCK.functionWithListener err
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
-      debug ("withSocket: requested binding for listener " ++ show endpoint)
+      debug ("withSocket: requested binding for listener " ++ describeEndpoint endpoint)
       case e2 of
         Left err -> do
           _ <- S.uninterruptibleClose fd
-          pure (Left (errorCode err))
+          handleBindListenException specifiedPort SCK.functionWithListener err
         Right _ -> S.uninterruptibleListen fd 16 >>= \case
           -- We hardcode the listen backlog to 16. The author is unfamiliar
           -- with use cases where gains are realized from tuning this parameter.
@@ -85,35 +96,42 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           Left err -> do
             _ <- S.uninterruptibleClose fd
             debug "withSocket: listen failed with error code"
-            pure (Left (errorCode err))
+            handleBindListenException specifiedPort SCK.functionWithListener err
           Right _ -> do
             -- The getsockname is copied from code in Socket.Datagram.IPv4.Undestined.
             -- Consider factoring this out.
-            eactualPort <- if specifiedPort == 0
+            actualPort <- if specifiedPort == 0
               then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
-                Left err -> do
-                  _ <- S.uninterruptibleClose fd
-                  pure (Left (errorCode err))
+                Left err -> throwIO $ SocketUnrecoverableException
+                  moduleSocketStreamIPv4
+                  functionWithListener
+                  [cgetsockname,describeEndpoint endpoint,describeErrorCode err]
                 Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                   then case S.decodeSocketAddressInternet sockAddr of
                     Just S.SocketAddressInternet{port = actualPort} -> do
                       let cleanActualPort = S.networkToHostShort actualPort
-                      debug ("withSocket: successfully bound listener " ++ show endpoint ++ " and got port " ++ show cleanActualPort)
-                      pure (Right cleanActualPort)
+                      debug ("withSocket: successfully bound listener " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanActualPort)
+                      pure cleanActualPort
                     Nothing -> do
                       _ <- S.uninterruptibleClose fd
-                      pure (Left (SocketAddressFamily (-1)))
+                      throwIO $ SocketUnrecoverableException
+                        moduleSocketStreamIPv4
+                        functionWithListener
+                        [cgetsockname,"non-internet socket family"]
                   else do
                     _ <- S.uninterruptibleClose fd
-                    pure (Left SocketAddressSize)
-              else pure (Right specifiedPort)
-            case eactualPort of
-              Left err -> pure (Left err)
-              Right actualPort -> do
-                a <- onException (restore (f (Listener fd) actualPort)) (S.uninterruptibleClose fd)
-                S.uninterruptibleClose fd >>= \case
-                  Left err -> pure (Left (errorCode err))
-                  Right _ -> pure (Right a)
+                    throwIO $ SocketUnrecoverableException
+                      moduleSocketStreamIPv4
+                      functionWithListener
+                      [cgetsockname,describeEndpoint endpoint,"socket address size"]
+              else pure specifiedPort
+            a <- onException (restore (f (Listener fd) actualPort)) (S.uninterruptibleClose fd)
+            S.uninterruptibleClose fd >>= \case
+              Left err -> throwIO $ SocketUnrecoverableException
+                moduleSocketStreamIPv4
+                functionWithListener
+                [cclose,describeEndpoint endpoint,describeErrorCode err]
+              Right _ -> pure (Right a)
 
 -- | Accept a connection on the listener and run the supplied callback
 -- on it. This closes the connection when the callback finishes or if
@@ -125,22 +143,22 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
 withAccepted ::
      Listener
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either SocketException a)
+  -> IO (Either (AcceptException 'Uninterruptible 'Unforked) a)
 withAccepted lst cb = internalAccepted
   ( \restore action -> do
-    action restore
+    fmap (first AcceptUngracefulClose) (action restore)
   ) lst cb
 
 internalAccepted ::
-     ((forall x. IO x -> IO x) -> ((IO a -> IO b) -> IO (Either SocketException b)) -> IO (Either SocketException c))
+     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Either CloseException d)) -> IO (Either (AcceptException 'Uninterruptible b) c))
   -> Listener
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either SocketException c)
+  -> IO (Either (AcceptException 'Uninterruptible b) c)
 internalAccepted wrap (Listener !lst) f = do
   threadWaitRead lst
   mask $ \restore -> do
     S.uninterruptibleAccept lst S.sizeofSocketAddressInternet >>= \case
-      Left err -> pure (Left (errorCode err))
+      Left err -> handleAcceptException "withAccepted" err
       Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
         then case S.decodeSocketAddressInternet sockAddr of
           Just sockAddrInet -> do
@@ -151,16 +169,27 @@ internalAccepted wrap (Listener !lst) f = do
               gracefulClose acpt a
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
-            pure (Left (SocketAddressFamily (-1)))
+            throwIO $ SocketUnrecoverableException
+              moduleSocketStreamIPv4
+              SCK.functionWithAccepted
+              [SCK.cgetsockname,SCK.nonInternetSocketFamily]
         else do
           _ <- S.uninterruptibleClose acpt
-          pure (Left SocketAddressSize)
+          throwIO $ SocketUnrecoverableException
+            moduleSocketStreamIPv4
+            SCK.functionWithAccepted
+            [SCK.cgetsockname,SCK.socketAddressSize]
 
-gracefulClose :: Fd -> a -> IO (Either SocketException a)
+gracefulClose :: Fd -> a -> IO (Either CloseException a)
 gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
   Left err -> do
     _ <- S.uninterruptibleClose fd
-    pure (Left (errorCode err))
+    -- TODO: What about ENOTCONN? Can this happen if the remote
+    -- side has already closed the connection?
+    throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      SCK.functionGracefulClose
+      [SCK.cshutdown,describeErrorCode err]
   Right _ -> do
     buf <- PM.newByteArray 1
     S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
@@ -170,25 +199,40 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
           S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
             Left err -> do
               _ <- S.uninterruptibleClose fd
-              pure (Left (errorCode err))
+              throwIO $ SocketUnrecoverableException
+                moduleSocketStreamIPv4
+                SCK.functionGracefulClose
+                [SCK.crecv,describeErrorCode err]
             Right sz -> if sz == 0
-              then fmap (bimap errorCode (const a)) (S.uninterruptibleClose fd)
+              then S.uninterruptibleClose fd >>= \case
+                Left err -> throwIO $ SocketUnrecoverableException
+                  moduleSocketStreamIPv4
+                  SCK.functionGracefulClose
+                  [SCK.cclose,describeErrorCode err]
+                Right _ -> pure (Right a)
               else do
                 debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
                 _ <- S.uninterruptibleClose fd
-                pure (Left RemoteNotShutdown)
+                pure (Left ClosePeerContinuedSending)
         else do
           _ <- S.uninterruptibleClose fd
-          -- Is this the right error context? It's a call
-          -- to recv, but it happens while shutting down
-          -- the socket.
-          pure (Left (errorCode err1))
+          -- We threat all @recv@ errors except for the nonblocking
+          -- notices as unrecoverable.
+          throwIO $ SocketUnrecoverableException
+            moduleSocketStreamIPv4
+            SCK.functionGracefulClose
+            [SCK.crecv,describeErrorCode err1]
       Right sz -> if sz == 0
-        then fmap (bimap errorCode (const a)) (S.uninterruptibleClose fd)
+        then S.uninterruptibleClose fd >>= \case
+          Left err -> throwIO $ SocketUnrecoverableException
+            moduleSocketStreamIPv4
+            SCK.functionGracefulClose
+            [SCK.cclose,describeErrorCode err]
+          Right _ -> pure (Right a)
         else do
           debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
           _ <- S.uninterruptibleClose fd
-          pure (Left RemoteNotShutdown)
+          pure (Left ClosePeerContinuedSending)
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. Prefer 'forkAcceptedUnmasked' unless the masking state
@@ -196,9 +240,9 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
 -- to the author.
 forkAccepted ::
      Listener
-  -> (Either SocketException a -> IO ())
+  -> (Either CloseException a -> IO ())
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either SocketException ThreadId)
+  -> IO (Either (AcceptException 'Uninterruptible 'Forked) ThreadId)
 forkAccepted lst consumeException cb = internalAccepted
   ( \restore action -> do
     tid <- forkIO $ do
@@ -209,12 +253,12 @@ forkAccepted lst consumeException cb = internalAccepted
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. The masking state is set to @Unmasked@ when running the
--- callback.
+-- callback. Typically, @a@ is instantiated to @()@.
 forkAcceptedUnmasked ::
      Listener
-  -> (Either SocketException a -> IO ())
+  -> (Either CloseException a -> IO ())
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either SocketException ThreadId)
+  -> IO (Either (AcceptException 'Uninterruptible 'Forked) ThreadId)
 forkAcceptedUnmasked lst consumeException cb = internalAccepted
   ( \_ action -> do
     tid <- forkIOWithUnmask $ \unmask -> do
@@ -227,7 +271,7 @@ forkAcceptedUnmasked lst consumeException cb = internalAccepted
 withConnection ::
      Endpoint -- ^ Remote endpoint
   -> (Connection -> IO a) -- ^ Callback to consume connection
-  -> IO (Either SocketException a)
+  -> IO (Either (ConnectException 'Uninterruptible 'Unforked) a)
 withConnection !remote f = mask $ \restore -> do
   debug ("withSocket: opening connection " ++ show remote)
   e1 <- S.uninterruptibleSocket S.internet
@@ -235,7 +279,7 @@ withConnection !remote f = mask $ \restore -> do
     S.defaultProtocol
   debug ("withSocket: opened connection " ++ show remote)
   case e1 of
-    Left err1 -> pure (Left (errorCode err1))
+    Left err -> handleSocketConnectException SCK.functionWithConnection err
     Right fd -> do
       let sockAddr = id
             $ S.encodeSocketAddressInternet
@@ -246,37 +290,43 @@ withConnection !remote f = mask $ \restore -> do
           then do
             threadWaitWrite fd
             pure Nothing
-          else pure (Just (errorCode err2))
+          else pure (Just err2)
         Right _ -> pure Nothing
       case merr of
         Just err -> do
           _ <- S.uninterruptibleClose fd
-          pure (Left err)
+          handleConnectException SCK.functionWithConnection err
         Nothing -> do
           e <- S.uninterruptibleGetSocketOption fd
             S.levelSocket S.optionError (intToCInt (PM.sizeOf (undefined :: CInt)))
           case e of
             Left err -> do
               _ <- S.uninterruptibleClose fd
-              pure (Left (errorCode err))
+              throwIO $ SocketUnrecoverableException
+                moduleSocketStreamIPv4
+                functionWithListener
+                [SCK.cgetsockopt,describeEndpoint remote,describeErrorCode err]
             Right (sz,S.OptionValue val) -> if sz == intToCInt (PM.sizeOf (undefined :: CInt))
               then
                 let err = PM.indexByteArray val 0 :: CInt in
                 if err == 0
                   then do
                     a <- onException (restore (f (Connection fd))) (S.uninterruptibleClose fd)
-                    gracefulClose fd a
+                    fmap (first ConnectUngracefulClose) (gracefulClose fd a)
                   else do
                     _ <- S.uninterruptibleClose fd
-                    pure (Left (errorCode (Errno err)))
+                    handleConnectException SCK.functionWithConnection (Errno err)
               else do
                 _ <- S.uninterruptibleClose fd
-                pure (Left OptionValueSize)
+                throwIO $ SocketUnrecoverableException
+                  moduleSocketStreamIPv4
+                  functionWithListener
+                  [SCK.cgetsockopt,describeEndpoint remote,connectErrorOptionValueSize]
 
 sendByteArray ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Buffer (will be sliced)
-  -> IO (Either SocketException ())
+  -> IO (Either (SendException 'Uninterruptible) ())
 sendByteArray conn arr =
   sendByteArraySlice conn arr 0 (PM.sizeofByteArray arr)
 
@@ -285,7 +335,7 @@ sendByteArraySlice ::
   -> ByteArray -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
-  -> IO (Either SocketException ())
+  -> IO (Either (SendException 'Uninterruptible) ())
 sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
   go !off !len = if len > 0
@@ -299,7 +349,7 @@ sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
 sendMutableByteArray ::
      Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
-  -> IO (Either SocketException ())
+  -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArray conn arr =
   sendMutableByteArraySlice conn arr 0 =<< PM.getSizeofMutableByteArray arr
 
@@ -308,7 +358,7 @@ sendMutableByteArraySlice ::
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
-  -> IO (Either SocketException ())
+  -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
   go !off !len = if len > 0
@@ -319,13 +369,13 @@ sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
         go (off + sz) (len - sz)
     else pure (Right ())
 
--- The length must be greater than zero.
+-- Precondition: the length must be greater than zero.
 internalSendMutable ::
      Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
-  -> IO (Either SocketException CSize)
+  -> IO (Either (SendException 'Uninterruptible) CSize)
 internalSendMutable (Connection !s) !payload !off !len = do
   e1 <- S.uninterruptibleSendMutableByteArray s payload
     (intToCInt off)
@@ -338,42 +388,42 @@ internalSendMutable (Connection !s) !payload !off !len = do
         e2 <- S.uninterruptibleSendMutableByteArray s payload
           (intToCInt off)
           (intToCSize len)
-          mempty
+          (S.noSignal)
         case e2 of
-          Left err2 -> pure (Left (errorCode err2))
+          Left err2 -> handleSendException functionSendMutableByteArray err2
           Right sz  -> pure (Right sz)
-      else pure (Left (errorCode err1))
+      else handleSendException "sendMutableByteArray" err1
     Right sz -> pure (Right sz)
 
--- The length must be greater than zero.
+-- Precondition: the length must be greater than zero.
 internalSend ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
-  -> IO (Either SocketException CSize)
+  -> IO (Either (SendException 'Uninterruptible) CSize)
 internalSend (Connection !s) !payload !off !len = do
-  debug ("send: about to send chunk on stream socket, offset " ++ show off ++ " and length " ++ show len)
+  debug ("internalSend: about to send chunk on stream socket, offset " ++ show off ++ " and length " ++ show len)
   e1 <- S.uninterruptibleSendByteArray s payload
     (intToCInt off)
     (intToCSize len)
-    mempty
-  debug "send: just sent chunk on stream socket"
+    (S.noSignal)
+  debug "internalSend: just sent chunk on stream socket"
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        debug "send: waiting to for write ready on stream socket"
+        debug "internalSend: waiting to for write ready on stream socket"
         threadWaitWrite s
         e2 <- S.uninterruptibleSendByteArray s payload
           (intToCInt off)
           (intToCSize len)
-          mempty
+          (S.noSignal)
         case e2 of
           Left err2 -> do
-            debug "send: encountered error after sending chunk on stream socket"
-            pure (Left (errorCode err2))
+            debug "internalSend: encountered error after sending chunk on stream socket"
+            handleSendException functionSendByteArray err2
           Right sz -> pure (Right sz)
-      else pure (Left (errorCode err1))
+      else handleSendException functionSendByteArray err1
     Right sz -> pure (Right sz)
 
 -- The maximum number of bytes to receive must be greater than zero.
@@ -509,3 +559,110 @@ shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
 
 errorCode :: Errno -> SocketException
 errorCode (Errno x) = ErrorCode x
+
+moduleSocketStreamIPv4 :: String
+moduleSocketStreamIPv4 = "Socket.Stream.IPv4"
+
+functionSendMutableByteArray :: String
+functionSendMutableByteArray = "sendMutableByteArray"
+
+functionSendByteArray :: String
+functionSendByteArray = "sendByteArray"
+
+functionWithListener :: String
+functionWithListener = "withListener"
+
+describeErrorCode :: Errno -> String
+describeErrorCode (Errno e) = "error code " ++ show e
+
+handleSendException :: String -> Errno -> IO (Either (SendException i) a)
+{-# INLINE handleSendException #-}
+handleSendException func e
+  | e == ePIPE = pure (Left SendShutdown)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+-- These are the exceptions that can happen as a result of a
+-- nonblocking @connect@ or as a result of subsequently calling
+-- @getsockopt@ to get the @SO_ERROR@ after the socket is ready
+-- for writes. For increased likelihood of correctness, we do
+-- not distinguish between which of these error codes can show
+-- up after which of those two calls. This means we are likely
+-- testing for some exceptions that cannot occur as a result of
+-- a particular call, but doing otherwise would be fraught with
+-- uncertainty.
+handleConnectException :: String -> Errno -> IO (Either (ConnectException i b) a)
+handleConnectException func e
+  | e == eACCES = pure (Left ConnectFirewalled)
+  | e == ePERM = pure (Left ConnectFirewalled)
+  | e == eNETUNREACH = pure (Left ConnectNetworkUnreachable)
+  | e == eCONNREFUSED = pure (Left ConnectRefused)
+  | e == eADDRNOTAVAIL = pure (Left ConnectEphemeralPortsExhausted)
+  | e == eTIMEDOUT = pure (Left ConnectTimeout)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+-- These are the exceptions that can happen as a result
+-- of calling @socket@ with the intent of using the socket
+-- to open a connection (not listen for inbound connections).
+handleSocketConnectException :: String -> Errno -> IO (Either (ConnectException i b) a)
+handleSocketConnectException func e
+  | e == eMFILE = pure (Left ConnectFileDescriptorLimit)
+  | e == eNFILE = pure (Left ConnectFileDescriptorLimit)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+-- These are the exceptions that can happen as a result
+-- of calling @socket@ with the intent of using the socket
+-- to listen for inbound connections.
+handleSocketListenException :: String -> Errno -> IO (Either ListenException a)
+handleSocketListenException func e
+  | e == eMFILE = pure (Left ListenFileDescriptorLimit)
+  | e == eNFILE = pure (Left ListenFileDescriptorLimit)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+-- These are the exceptions that can happen as a result
+-- of calling @bind@ with the intent of using the socket
+-- to listen for inbound connections. This is also used
+-- to clean up the error codes of @listen@. The two can
+-- report some of the same error codes, and those happen
+-- to be the error codes we are interested in.
+--
+-- NB: EACCES only happens on @bind@, not on @listen@.
+handleBindListenException :: Word16 -> String -> Errno -> IO (Either ListenException a)
+handleBindListenException thePort func e
+  | e == eACCES = pure (Left ListenPermissionDenied)
+  | e == eADDRINUSE = if thePort == 0
+      then pure (Left ListenAddressInUse)
+      else pure (Left ListenEphemeralPortsExhausted)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+-- These are the exceptions that can happen as a result
+-- of calling @socket@ with the intent of using the socket
+-- to open a connection (not listen for inbound connections).
+handleAcceptException :: String -> Errno -> IO (Either (AcceptException i b) a)
+handleAcceptException func e
+  | e == eCONNABORTED = pure (Left AcceptConnectionAborted)
+  | e == eMFILE = pure (Left AcceptFileDescriptorLimit)
+  | e == eNFILE = pure (Left AcceptFileDescriptorLimit)
+  | e == ePERM = pure (Left AcceptFirewalled)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
+
+connectErrorOptionValueSize :: String
+connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
+

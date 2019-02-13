@@ -1,4 +1,5 @@
 {-# language BangPatterns #-}
+{-# language DataKinds #-}
 {-# language DeriveAnyClass #-}
 {-# language DerivingStrategies #-}
 {-# language DuplicateRecordFields #-}
@@ -32,16 +33,18 @@ import Control.Concurrent (threadWaitWrite,threadWaitRead)
 import Control.Exception (throwIO,mask,onException)
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16)
-import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
+import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN,eACCES)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (SocketException(..),SocketUnrecoverableException(..))
+import Socket (SocketException(..),SocketUnrecoverableException(..),Direction(..),Interruptibility(..))
+import Socket (cgetsockname)
+import Socket.Datagram (DatagramException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..),Socket(..))
 import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany,receiveManyUnless)
 import Socket.Debug (debug)
-import Socket.IPv4 (Endpoint(..))
+import Socket.IPv4 (Endpoint(..),describeEndpoint)
 
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
@@ -60,20 +63,20 @@ withSocket ::
   -> (Socket -> Word16 -> IO a) -- ^ Callback providing the socket and the chosen port
   -> IO (Either SocketException a)
 withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
-  debug ("withSocket: opening socket " ++ show endpoint)
+  debug ("withSocket: opening socket " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.datagram)
     S.defaultProtocol
-  debug ("withSocket: opened socket " ++ show endpoint)
+  debug ("withSocket: opened socket " ++ describeEndpoint endpoint)
   case e1 of
     Left err -> throwIO $ SocketUnrecoverableException
       moduleSocketDatagramIPv4Undestined
       functionWithSocket
-      ["socket",show endpoint,describeErrorCode err]
+      ["socket",describeEndpoint endpoint,describeErrorCode err]
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
-      debug ("withSocket: requested binding for " ++ show endpoint)
+      debug ("withSocket: requested binding for " ++ describeEndpoint endpoint)
       case e2 of
         Left err -> do
           -- We intentionally discard any exceptions thrown by close. There is
@@ -82,7 +85,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           throwIO $ SocketUnrecoverableException
             moduleSocketDatagramIPv4Undestined
             functionWithSocket
-            ["bind",show endpoint,describeErrorCode err]
+            ["bind",describeEndpoint endpoint,describeErrorCode err]
         Right _ -> do
           eactualPort <- if specifiedPort == 0
             then S.uninterruptibleGetSocketName fd S.sizeofSocketAddressInternet >>= \case
@@ -91,25 +94,25 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                 throwIO $ SocketUnrecoverableException
                   moduleSocketDatagramIPv4Undestined
                   functionWithSocket
-                  ["getsockname",show endpoint,describeErrorCode err]
+                  ["getsockname",describeEndpoint endpoint,describeErrorCode err]
               Right (sockAddrRequiredSz,sockAddr) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
                 then case S.decodeSocketAddressInternet sockAddr of
                   Just S.SocketAddressInternet{port = actualPort} -> do
                     let cleanPort = S.networkToHostShort actualPort
-                    debug ("withSocket: successfully bound " ++ show endpoint ++ " and got port " ++ show cleanPort)
+                    debug ("withSocket: successfully bound " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanPort)
                     pure (Right cleanPort)
                   Nothing -> do
                     S.uninterruptibleErrorlessClose fd
                     throwIO $ SocketUnrecoverableException
                       moduleSocketDatagramIPv4Undestined
                       functionWithSocket
-                      ["getsockname",show endpoint,"non-internet socket family"]
+                      [cgetsockname,describeEndpoint endpoint,"non-internet socket family"]
                 else do
                   S.uninterruptibleErrorlessClose fd
                   throwIO $ SocketUnrecoverableException
                     moduleSocketDatagramIPv4Undestined
                     functionWithSocket
-                    ["getsockname",show endpoint,"sockaddr size"]
+                    [cgetsockname,describeEndpoint endpoint,"socket address size"]
             else pure (Right specifiedPort)
           case eactualPort of
             Left err -> pure (Left err)
@@ -119,7 +122,7 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                 Left err -> throwIO $ SocketUnrecoverableException
                   moduleSocketDatagramIPv4Undestined
                   functionWithSocket
-                  ["close",show endpoint,describeErrorCode err]
+                  ["close",describeEndpoint endpoint,describeErrorCode err]
                 Right _ -> pure (Right a)
 
 -- | Send a slice of a bytearray to the specified endpoint.
@@ -360,4 +363,13 @@ functionWithSocket = "withSocket"
 
 describeErrorCode :: Errno -> String
 describeErrorCode (Errno e) = "error code " ++ show e
+
+handleSendException :: String -> Errno -> IO (Either (DatagramException 'Send i) a)
+{-# INLINE handleSendException #-}
+handleSendException func e
+  | e == eACCES = pure (Left Broadcast)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Undestined
+      func
+      [describeErrorCode e]
 
