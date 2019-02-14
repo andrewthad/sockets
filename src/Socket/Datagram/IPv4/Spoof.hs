@@ -29,16 +29,15 @@ module Socket.Datagram.IPv4.Spoof
   , SendException(..)
   ) where
 
-import Control.Concurrent (threadWaitWrite,threadWaitRead)
+import Control.Concurrent (threadWaitWrite)
 import Control.Exception (Exception,throwIO,mask,onException)
-import Data.Bits (unsafeShiftL,unsafeShiftR,complement,(.&.))
+import Data.Bits (unsafeShiftR,complement,(.&.))
 import Data.Kind (Type)
-import Data.Monoid (Endo(..))
-import Data.Primitive (ByteArray,MutableByteArray(..))
+import Data.Primitive (MutableByteArray(..))
 import Data.Word (Word16,Word8,Word64,Word32)
 import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN,eMFILE,eNFILE,eACCES,ePERM)
 import Foreign.C.Types (CInt,CSize)
-import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
+import GHC.Exts (RealWorld,touch#)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (SocketUnrecoverableException(..),Interruptibility(..))
@@ -47,10 +46,8 @@ import Socket.Datagram.IPv4.Undestined.Internal (Message(..))
 import Socket.Debug (debug,whenDebugging)
 import Socket.IPv4 (Endpoint(..))
 import System.Posix.Types (Fd)
-import Numeric (showHex)
 import Text.Printf (printf)
 
-import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
@@ -229,23 +226,6 @@ endpointToSocketAddressInternet (Endpoint {address, port}) = S.SocketAddressInte
   , address = S.hostToNetworkLong (getIPv4 address)
   }
 
-socketAddressInternetToEndpoint :: S.SocketAddressInternet -> Endpoint
-socketAddressInternetToEndpoint (S.SocketAddressInternet {address,port}) = Endpoint
-  { address = IPv4 (S.networkToHostLong address)
-  , port = S.networkToHostShort port
-  }
-
-shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
-shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
-  PM.primitive_ (shrinkMutableByteArray# arr sz)
-
-
-touchByteArray :: ByteArray -> IO ()
-touchByteArray (PM.ByteArray x) = touchByteArray# x
-
-touchByteArray# :: ByteArray# -> IO ()
-touchByteArray# x = IO $ \s -> case touch# x s of s' -> (# s', () #)
-
 intToCInt :: Int -> CInt
 intToCInt = fromIntegral
 
@@ -269,9 +249,6 @@ cintToWord16 = fromIntegral
 
 word16ToWord64 :: Word16 -> Word64
 word16ToWord64 = fromIntegral
-
-word32ToWord64 :: Word32 -> Word64
-word32ToWord64 = fromIntegral
 
 word64ToWord16 :: Word64 -> Word16
 word64ToWord16 = fromIntegral
