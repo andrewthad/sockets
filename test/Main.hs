@@ -1,13 +1,17 @@
 {-# language BangPatterns #-}
+{-# language LambdaCase #-}
 {-# language ScopedTypeVariables #-}
 
 import Control.Concurrent.Async (concurrently)
 import Control.Exception (Exception)
 import Control.Exception (throwIO)
 import Control.Monad.ST (runST)
+import Data.Bool (bool)
 import Data.Primitive (ByteArray)
 import Data.Word (Word16,Word8)
 import GHC.Exts (RealWorld)
+import System.Exit (exitFailure)
+import System.IO (stderr,hPutStrLn)
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -20,10 +24,18 @@ import qualified Socket.Datagram.IPv4.Undestined as DIU
 import qualified Socket.Stream.IPv4 as SI
 
 main :: IO ()
-main = defaultMain tests
+main = do
+  canSpoof <- DIS.withSocket (const (pure ())) >>= \case
+    Right () -> pure True
+    Left e -> case e of
+      DIS.SocketPermissionDenied -> pure False
+      DIS.SocketFileDescriptorLimit -> do
+        hPutStrLn stderr "All ephemeral ports are in use. Terminating."
+        exitFailure
+  defaultMain (tests canSpoof)
 
-tests :: TestTree
-tests = testGroup "socket"
+tests :: Bool -> TestTree
+tests canSpoof = testGroup "socket"
   [ testGroup "datagram"
     [ testGroup "ipv4"
       [ testGroup "undestined"
@@ -31,10 +43,12 @@ tests = testGroup "socket"
         , testCase "B" testDatagramUndestinedB
         , testCase "C" testDatagramUndestinedC
         ]
-      , testGroup "spoof"
-        [ testCase "A" testDatagramSpoofA
-        , testCase "B" testDatagramSpoofB
-        ]
+      , testGroup "spoof" $ if canSpoof
+          then
+            [ testCase "A" testDatagramSpoofA
+            , testCase "B" testDatagramSpoofB
+            ]
+          else []
       ]
     ]
   , testGroup "stream"
