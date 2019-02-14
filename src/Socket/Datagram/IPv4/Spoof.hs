@@ -1,10 +1,14 @@
 {-# language BangPatterns #-}
+{-# language DataKinds #-}
 {-# language DeriveAnyClass #-}
 {-# language DerivingStrategies #-}
 {-# language DuplicateRecordFields #-}
+{-# language GADTs #-}
+{-# language KindSignatures #-}
 {-# language LambdaCase #-}
 {-# language MagicHash #-}
 {-# language NamedFieldPuns #-}
+{-# language StandaloneDeriving #-}
 {-# language UnboxedTuples #-}
 
 -- | Internet datagram sockets without a fixed destination.
@@ -22,22 +26,23 @@ module Socket.Datagram.IPv4.Spoof
   , sendMutableByteArray
     -- * Exceptions
   , SocketException(..)
-    -- * Examples
-    -- $examples
+  , SendException(..)
   ) where
 
 import Control.Concurrent (threadWaitWrite,threadWaitRead)
-import Control.Exception (mask,onException)
+import Control.Exception (Exception,throwIO,mask,onException)
 import Data.Bits (unsafeShiftL,unsafeShiftR,complement,(.&.))
+import Data.Kind (Type)
 import Data.Monoid (Endo(..))
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16,Word8,Word64,Word32)
-import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
+import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN,eMFILE,eNFILE,eACCES,ePERM)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (Int(I#),RealWorld,shrinkMutableByteArray#,ByteArray#,touch#)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (SocketException(..))
+import Socket (SocketUnrecoverableException(..),Interruptibility(..))
+import Socket.Datagram (SendException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..))
 import Socket.Debug (debug,whenDebugging)
 import Socket.IPv4 (Endpoint(..))
@@ -50,11 +55,31 @@ import qualified Data.Primitive as PM
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified GHC.Exts as E
+import qualified Socket as SCK
+
+-- TODO: Something I am not sure about is whether or not it is necessary
+-- to bind to a port right after creating the socket. If we defering
+-- binding until the call to the time of sending, what port do we bind
+-- to? Does the kernel use the one in the source port or does it choose
+-- an ephemeral port? We need it to choose an ephemeral port. Otherwise,
+-- we can get spurious failures.
 
 -- | A socket that send datagrams with spoofed source IP addresses.
 -- It cannot receive datagrams.
 newtype Socket = Socket Fd
   deriving stock (Eq,Ord,Show)
+
+data SocketException :: Type where
+  -- | Permission to create a raw socket was denied. The process needs
+  --   the capability @CAP_NET_RAW@, or it must be run as root.
+  SocketPermissionDenied :: SocketException
+  -- | A limit on the number of open file descriptors has been reached.
+  --   This could be the per-process limit or the system limit.
+  --   (@EMFILE@ and @ENFILE@)
+  SocketFileDescriptorLimit :: SocketException
+
+deriving stock instance Show SocketException
+deriving anyclass instance Exception SocketException
 
 -- | Open a socket and run the supplied callback on it. This closes the socket
 -- when the callback finishes or when an exception is thrown. Do not return 
@@ -70,11 +95,14 @@ withSocket f = mask $ \restore -> do
     S.rawProtocol
   debug "withSocket: opened raw socket"
   case e1 of
-    Left err -> pure (Left (errorCode err))
+    Left err -> handleSocketException SCK.functionWithSocket err
     Right fd -> do
       a <- onException (restore (f (Socket fd))) (S.uninterruptibleErrorlessClose fd)
       S.uninterruptibleClose fd >>= \case
-        Left err -> pure (Left (errorCode err))
+        Left err -> throwIO $ SocketUnrecoverableException
+          moduleSocketDatagramIPv4Spoof
+          SCK.functionWithSocket
+          ["close",describeErrorCode err]
         Right _ -> pure (Right a)
 
 -- | Send a slice of a bytearray to the specified endpoint.
@@ -85,7 +113,7 @@ sendMutableByteArray ::
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
-  -> IO (Either SocketException ())
+  -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArray (Socket !s) !theSource !theRemote !thePayload !off !len = do
   let ipHeaderSz = cintToInt L.sizeofIpHeader
   let totalHeaderSz = cintToInt (L.sizeofIpHeader + L.sizeofUdpHeader)
@@ -145,18 +173,18 @@ sendMutableByteArray (Socket !s) !theSource !theRemote !thePayload !off !len = d
         case e2 of
           Left err2 -> do
             debug ("send mutable: encountered error after sending")
-            pure (Left (errorCode err2))
+            handleSendException "sendMutableByteArray" err2
           Right sz -> if csizeToInt sz == totalPacketSz
             then pure (Right ())
-            else pure (Left (SentMessageTruncated (csizeToInt sz)))
+            else pure (Left (SendTruncated (csizeToInt sz)))
       else do
         debug "spoof send mutable: sent on first try but got error code" 
-        pure (Left (errorCode err1))
+        handleSendException "sendMutableByteArray" err1
     Right sz -> if csizeToInt sz == totalPacketSz
       then do
         debug ("send mutable: success")
         pure (Right ())
-      else pure (Left (SentMessageTruncated (csizeToInt sz)))
+      else pure (Left (SendTruncated (csizeToInt sz)))
 
 -- Precondition: the mutable byte array must have an extra zeroed out
 -- byte at the end. That is, at arr[offset+length], there exists a
@@ -207,9 +235,6 @@ socketAddressInternetToEndpoint (S.SocketAddressInternet {address,port}) = Endpo
   , port = S.networkToHostShort port
   }
 
-errorCode :: Errno -> SocketException
-errorCode (Errno x) = ErrorCode x
-
 shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
 shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
   PM.primitive_ (shrinkMutableByteArray# arr sz)
@@ -259,3 +284,30 @@ touchMutableByteArray (MutableByteArray x) = touchMutableByteArray# x
 
 touchMutableByteArray# :: E.MutableByteArray# RealWorld -> IO ()
 touchMutableByteArray# x = IO $ \s -> case touch# x s of s' -> (# s', () #)
+
+moduleSocketDatagramIPv4Spoof :: String
+moduleSocketDatagramIPv4Spoof = "Socket.Datagram.IPv4.Spoof"
+
+handleSocketException :: String -> Errno -> IO (Either SocketException a)
+{-# INLINE handleSocketException #-}
+handleSocketException func e
+  | e == ePERM = pure (Left SocketPermissionDenied)
+  | e == eMFILE = pure (Left SocketFileDescriptorLimit)
+  | e == eNFILE = pure (Left SocketFileDescriptorLimit)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Spoof
+      func
+      [describeErrorCode e]
+
+describeErrorCode :: Errno -> String
+describeErrorCode (Errno e) = "error code " ++ show e
+
+handleSendException :: String -> Errno -> IO (Either (SendException i) a)
+{-# INLINE handleSendException #-}
+handleSendException func e
+  | e == eACCES = pure (Left SendBroadcasted)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketDatagramIPv4Spoof
+      func
+      [describeErrorCode e]
+

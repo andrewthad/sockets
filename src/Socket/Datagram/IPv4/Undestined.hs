@@ -18,8 +18,8 @@ module Socket.Datagram.IPv4.Undestined
   , withSocket
     -- * Communicate
   , send
-  , sendMutableByteArray
-  , receive
+  , sendMutableByteArraySlice
+  , receiveByteArray
   , receiveMutableByteArraySlice_
   , receiveMany
   , receiveManyUnless
@@ -40,12 +40,13 @@ import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (SocketException(..),SocketUnrecoverableException(..),Direction(..),Interruptibility(..))
 import Socket (cgetsockname)
-import Socket.Datagram (DatagramException(..))
+import Socket.Datagram (SendException(..),ReceiveException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..),Socket(..))
 import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany,receiveManyUnless)
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..),describeEndpoint)
 
+import qualified Socket as SCK
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
 import qualified Linux.Socket as L
@@ -172,14 +173,14 @@ send (Socket !s) !theRemote !thePayload !off !len = do
       else pure (Left (SentMessageTruncated (csizeToInt sz)))
 
 -- | Send a slice of a bytearray to the specified endpoint.
-sendMutableByteArray ::
+sendMutableByteArraySlice ::
      Socket -- ^ Socket
   -> Endpoint -- ^ Remote IPv4 address and port
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
-  -> IO (Either SocketException ())
-sendMutableByteArray (Socket !s) !theRemote !thePayload !off !len = do
+  -> IO (Either (SendException 'Uninterruptible) ())
+sendMutableByteArraySlice (Socket !s) !theRemote !thePayload !off !len = do
   debug ("send mutable: about to send to " ++ show theRemote)
   e1 <- S.uninterruptibleSendToMutableByteArray s thePayload
     (intToCInt off)
@@ -200,29 +201,23 @@ sendMutableByteArray (Socket !s) !theRemote !thePayload !off !len = do
         case e2 of
           Left err2 -> do
             debug ("send mutable: encountered error after sending")
-            throwIO $ SocketUnrecoverableException
-              moduleSocketDatagramIPv4Undestined
-              functionSendMutableByteArray
-              ["second",show theRemote,describeErrorCode err2]
+            handleSendException functionSendMutableByteArray err2
           Right sz -> if csizeToInt sz == len
             then pure (Right ())
-            else pure (Left (SentMessageTruncated (csizeToInt sz)))
-      else throwIO $ SocketUnrecoverableException
-        moduleSocketDatagramIPv4Undestined
-        functionSendMutableByteArray
-        ["first",show theRemote,describeErrorCode err1]
+            else pure (Left (SendTruncated (csizeToInt sz)))
+      else handleSendException functionSendMutableByteArray err1
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send mutable: success")
         pure (Right ())
-      else pure (Left (SentMessageTruncated (csizeToInt sz)))
+      else pure (Left (SendTruncated (csizeToInt sz)))
 
 -- | Receive a datagram into a freshly allocated bytearray.
-receive ::
+receiveByteArray ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum size of datagram to receive
-  -> IO (Either SocketException Message)
-receive (Socket !fd) !maxSz = do
+  -> IO (Either (ReceiveException 'Uninterruptible) Message)
+receiveByteArray (Socket !fd) !maxSz = do
   debug "receive: about to wait"
   threadWaitRead fd
   debug "receive: socket is now readable"
@@ -246,9 +241,15 @@ receive (Socket !fd) !maxSz = do
             shrinkMutableByteArray marr (csizeToInt recvSz)
             arr <- PM.unsafeFreezeByteArray marr
             pure $ Right (Message (socketAddressInternetToEndpoint sockAddrInet) arr)
-          Nothing -> pure (Left (SocketAddressFamily (-1)))
-        else pure (Left SocketAddressSize)
-      else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
+          Nothing -> throwIO $ SocketUnrecoverableException
+            moduleSocketDatagramIPv4Undestined
+            functionReceive
+            [SCK.crecvfrom,SCK.nonInternetSocketFamily]
+        else throwIO $ SocketUnrecoverableException
+          moduleSocketDatagramIPv4Undestined
+          functionReceive
+          [SCK.crecvfrom,SCK.socketAddressSize]
+      else pure (Left (ReceiveTruncated (csizeToInt recvSz)))
 
 -- | Receive a datagram into a mutable byte array, ignoring information about
 --   the remote endpoint. Returns the actual number of bytes present in the
@@ -364,10 +365,10 @@ functionWithSocket = "withSocket"
 describeErrorCode :: Errno -> String
 describeErrorCode (Errno e) = "error code " ++ show e
 
-handleSendException :: String -> Errno -> IO (Either (DatagramException 'Send i) a)
+handleSendException :: String -> Errno -> IO (Either (SendException i) a)
 {-# INLINE handleSendException #-}
 handleSendException func e
-  | e == eACCES = pure (Left Broadcast)
+  | e == eACCES = pure (Left SendBroadcasted)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketDatagramIPv4Undestined
       func

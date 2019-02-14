@@ -5,27 +5,40 @@
 {-# language KindSignatures #-}
 {-# language StandaloneDeriving #-}
 module Socket.Datagram
-  ( DatagramException(..)
+  ( SendException(..)
+  , ReceiveException(..)
+  , SocketException(..)
   ) where
 
-import Socket (Direction(..),Interruptibility(..))
+import Socket (Interruptibility(..))
+import Socket.IPv4 (SocketException(..))
 
 import Data.Kind (Type)
 import Data.Typeable (Typeable)
 import Control.Exception (Exception)
 
-data DatagramException :: Direction -> Interruptibility -> Type where
-  -- | The datagram did not fit in the buffer. If this happens
-  --   while sending, the field is the number of bytes in the datagram
-  --   that were successfully copied into the send buffer. If this
-  --   happens while receiving, the field is the original size of
-  --   the datagram that was truncated. (Users who get this while
-  --   receiving likely need to use a larger receive buffer.)
-  Truncation :: !Int -> DatagramException d i
-  -- | STM-style interrupt (much safer than C-style interrupt)
-  Interrupt :: DatagramException d 'Interruptible
+data SendException :: Interruptibility -> Type where
+  -- | The datagram did not fit in the buffer. The field is the
+  --   number of bytes that were successfully copied into the
+  --   send buffer. The datagram does still get sent when this
+  --   happens.
+  SendTruncated :: !Int -> SendException i
   -- | Attempted to send to a broadcast address.
-  Broadcast :: DatagramException 'Send i
+  SendBroadcasted :: SendException i
+  -- | STM-style interrupt (much safer than C-style interrupt)
+  SendInterrupted :: SendException 'Interruptible
 
-deriving stock instance Show (DatagramException d i)
-deriving anyclass instance (Typeable d, Typeable i) => Exception (DatagramException d i)
+deriving stock instance Show (SendException i)
+deriving anyclass instance (Typeable i) => Exception (SendException i)
+
+data ReceiveException :: Interruptibility -> Type where
+  -- | The datagram did not fit in the buffer. The field is the
+  --   original size of the datagram that was truncated. If
+  --   this happens, the process probably needs to start using
+  --   a larger receive buffer.
+  ReceiveTruncated :: !Int -> ReceiveException i
+  -- | STM-style interrupt (much safer than C-style interrupt)
+  ReceiveInterrupted :: ReceiveException 'Interruptible
+
+deriving stock instance Show (ReceiveException i)
+deriving anyclass instance (Typeable i) => Exception (ReceiveException i)

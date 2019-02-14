@@ -30,7 +30,7 @@ module Socket.Stream.IPv4
   , SendException(..)
   , ReceiveException(..)
   , ConnectException(..)
-  , ListenException(..)
+  , SocketException(..)
   , CloseException(..)
   , Interruptibility(..)
   ) where
@@ -43,15 +43,15 @@ import Data.Primitive (ByteArray, MutableByteArray(..))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
-import Foreign.C.Error (eADDRINUSE)
+import Foreign.C.Error (eADDRINUSE,eCONNRESET)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Types (CInt, CSize)
 import GHC.Exts (Int(I#), RealWorld, shrinkMutableByteArray#)
 import Net.Types (IPv4(..))
-import Socket (SocketException(..),Interruptibility(..),Forkedness(..))
+import Socket (Interruptibility(..),Forkedness(..))
 import Socket (cgetsockname,cclose)
 import Socket (SocketUnrecoverableException(..))
-import Socket.Stream (ConnectException(..),ListenException(..),AcceptException(..))
+import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
 import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..),describeEndpoint)
@@ -72,7 +72,7 @@ newtype Connection = Connection Fd
 withListener ::
      Endpoint
   -> (Listener -> Word16 -> IO a)
-  -> IO (Either ListenException a)
+  -> IO (Either SocketException a)
 withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
   debug ("withSocket: opening listener " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
@@ -133,27 +133,14 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                 [cclose,describeEndpoint endpoint,describeErrorCode err]
               Right _ -> pure (Right a)
 
--- | Accept a connection on the listener and run the supplied callback
--- on it. This closes the connection when the callback finishes or if
--- an exception is thrown. Since this function blocks the thread until
--- the callback finishes, it is only suitable for stream socket clients
--- that handle one connection at a time. The variant 'forkAcceptedUnmasked'
--- is preferrable for servers that need to handle connections concurrently
--- (most use cases).
-withAccepted ::
-     Listener
-  -> (Connection -> Endpoint -> IO a)
-  -> IO (Either (AcceptException 'Uninterruptible 'Unforked) a)
-withAccepted lst cb = internalAccepted
-  ( \restore action -> do
-    fmap (first AcceptUngracefulClose) (action restore)
-  ) lst cb
-
+-- This function factors out the common elements of withAccepted, forkAccepted,
+-- and forkAcceptedUnmasked. Unfortunately, I can barely understand it. The
+-- higher-rank callback is particularly impenetrable. Sorry.
 internalAccepted ::
-     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Either CloseException d)) -> IO (Either (AcceptException 'Uninterruptible b) c))
+     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Maybe CloseException,d)) -> IO (Either (AcceptException 'Uninterruptible) c))
   -> Listener
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either (AcceptException 'Uninterruptible b) c)
+  -> IO (Either (AcceptException 'Uninterruptible) c)
 internalAccepted wrap (Listener !lst) f = do
   threadWaitRead lst
   mask $ \restore -> do
@@ -163,10 +150,11 @@ internalAccepted wrap (Listener !lst) f = do
         then case S.decodeSocketAddressInternet sockAddr of
           Just sockAddrInet -> do
             let acceptedEndpoint = socketAddressInternetToEndpoint sockAddrInet
-            debug ("withAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
+            debug ("internalAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
             wrap restore $ \restore' -> do
               a <- onException (restore' (f (Connection acpt) acceptedEndpoint)) (S.uninterruptibleClose acpt)
-              gracefulClose acpt a
+              e <- gracefulClose acpt
+              pure (e,a)
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
             throwIO $ SocketUnrecoverableException
@@ -180,8 +168,8 @@ internalAccepted wrap (Listener !lst) f = do
             SCK.functionWithAccepted
             [SCK.cgetsockname,SCK.socketAddressSize]
 
-gracefulClose :: Fd -> a -> IO (Either CloseException a)
-gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
+gracefulClose :: Fd -> IO (Maybe CloseException)
+gracefulClose fd = S.uninterruptibleShutdown fd S.write >>= \case
   Left err -> do
     _ <- S.uninterruptibleClose fd
     -- TODO: What about ENOTCONN? Can this happen if the remote
@@ -209,11 +197,11 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
                   moduleSocketStreamIPv4
                   SCK.functionGracefulClose
                   [SCK.cclose,describeErrorCode err]
-                Right _ -> pure (Right a)
+                Right _ -> pure Nothing
               else do
                 debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
                 _ <- S.uninterruptibleClose fd
-                pure (Left ClosePeerContinuedSending)
+                pure (Just ClosePeerContinuedSending)
         else do
           _ <- S.uninterruptibleClose fd
           -- We threat all @recv@ errors except for the nonblocking
@@ -228,11 +216,32 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
             moduleSocketStreamIPv4
             SCK.functionGracefulClose
             [SCK.cclose,describeErrorCode err]
-          Right _ -> pure (Right a)
+          Right _ -> pure Nothing
         else do
           debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
           _ <- S.uninterruptibleClose fd
-          pure (Left ClosePeerContinuedSending)
+          pure (Just ClosePeerContinuedSending)
+
+-- | Accept a connection on the listener and run the supplied callback
+-- on it. This closes the connection when the callback finishes or if
+-- an exception is thrown. Since this function blocks the thread until
+-- the callback finishes, it is only suitable for stream socket clients
+-- that handle one connection at a time. The variant 'forkAcceptedUnmasked'
+-- is preferrable for servers that need to handle connections concurrently
+-- (most use cases).
+withAccepted ::
+     Listener
+  -> (Maybe CloseException -> a -> IO b)
+     -- ^ Callback to handle an ungraceful close. 
+  -> (Connection -> Endpoint -> IO a)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (AcceptException 'Uninterruptible) b)
+withAccepted lst consumeException cb = internalAccepted
+  ( \restore action -> do
+    (e,a) <- action restore
+    b <- consumeException e a
+    pure (Right b)
+  ) lst cb
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. Prefer 'forkAcceptedUnmasked' unless the masking state
@@ -240,14 +249,16 @@ gracefulClose fd a = S.uninterruptibleShutdown fd S.write >>= \case
 -- to the author.
 forkAccepted ::
      Listener
-  -> (Either CloseException a -> IO ())
+  -> (Maybe CloseException -> a -> IO ())
+     -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either (AcceptException 'Uninterruptible 'Forked) ThreadId)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
 forkAccepted lst consumeException cb = internalAccepted
   ( \restore action -> do
     tid <- forkIO $ do
-      x <- action restore
-      restore (consumeException x)
+      (e,x) <- action restore
+      restore (consumeException e x)
     pure (Right tid)
   ) lst cb
 
@@ -256,23 +267,29 @@ forkAccepted lst consumeException cb = internalAccepted
 -- callback. Typically, @a@ is instantiated to @()@.
 forkAcceptedUnmasked ::
      Listener
-  -> (Either CloseException a -> IO ())
+  -> (Maybe CloseException -> a -> IO ())
+     -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> Endpoint -> IO a)
-  -> IO (Either (AcceptException 'Uninterruptible 'Forked) ThreadId)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
 forkAcceptedUnmasked lst consumeException cb = internalAccepted
   ( \_ action -> do
     tid <- forkIOWithUnmask $ \unmask -> do
-      x <- action unmask
-      unmask (consumeException x)
+      (e,x) <- action unmask
+      unmask (consumeException e x)
     pure (Right tid)
   ) lst cb
 
 -- | Establish a connection to a server.
 withConnection ::
-     Endpoint -- ^ Remote endpoint
-  -> (Connection -> IO a) -- ^ Callback to consume connection
-  -> IO (Either (ConnectException 'Uninterruptible 'Unforked) a)
-withConnection !remote f = mask $ \restore -> do
+     Endpoint
+     -- ^ Remote endpoint
+  -> (Maybe CloseException -> a -> IO b)
+     -- ^ Callback to handle an ungraceful close. 
+  -> (Connection -> IO a)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (ConnectException 'Uninterruptible) b)
+withConnection !remote g f = mask $ \restore -> do
   debug ("withSocket: opening connection " ++ show remote)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
@@ -312,7 +329,9 @@ withConnection !remote f = mask $ \restore -> do
                 if err == 0
                   then do
                     a <- onException (restore (f (Connection fd))) (S.uninterruptibleClose fd)
-                    fmap (first ConnectUngracefulClose) (gracefulClose fd a)
+                    m <- gracefulClose fd
+                    b <- g m a
+                    pure (Right b)
                   else do
                     _ <- S.uninterruptibleClose fd
                     handleConnectException SCK.functionWithConnection (Errno err)
@@ -325,16 +344,16 @@ withConnection !remote f = mask $ \restore -> do
 
 sendByteArray ::
      Connection -- ^ Connection
-  -> ByteArray -- ^ Buffer (will be sliced)
+  -> ByteArray -- ^ Payload
   -> IO (Either (SendException 'Uninterruptible) ())
 sendByteArray conn arr =
   sendByteArraySlice conn arr 0 (PM.sizeofByteArray arr)
 
 sendByteArraySlice ::
      Connection -- ^ Connection
-  -> ByteArray -- ^ Buffer (will be sliced)
+  -> ByteArray -- ^ Payload (will be sliced)
   -> Int -- ^ Offset into payload
-  -> Int -- ^ Lenth of slice into buffer
+  -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) ())
 sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
@@ -344,7 +363,12 @@ sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
       Right sz' -> do
         let sz = csizeToInt sz'
         go (off + sz) (len - sz)
-    else pure (Right ())
+    else if len == 0
+      then pure (Right ())
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionSendByteArray
+        [SCK.negativeSliceLength]
 
 sendMutableByteArray ::
      Connection -- ^ Connection
@@ -357,7 +381,7 @@ sendMutableByteArraySlice ::
      Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
-  -> Int -- ^ Lenth of slice into buffer
+  -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
@@ -367,7 +391,12 @@ sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
       Right sz' -> do
         let sz = csizeToInt sz'
         go (off + sz) (len - sz)
-    else pure (Right ())
+    else if len == 0
+      then pure (Right ())
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionSendMutableByteArray
+        [SCK.negativeSliceLength]
 
 -- Precondition: the length must be greater than zero.
 internalSendMutable ::
@@ -432,13 +461,14 @@ internalSend (Connection !s) !payload !off !len = do
 -- This function does not validate that the result size is greater
 -- than zero. Functions calling this must perform that check. This
 -- also does not trim the buffer. The caller must do that if it is
--- necessary.
+-- necessary. This function does use the event manager to wait
+-- for the socket to be ready for reads.
 internalReceiveMaximally ::
      Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Receive buffer
   -> Int -- ^ Offset into buffer
-  -> IO (Either SocketException Int)
+  -> IO Int
 internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   debug "receive: stream socket about to wait"
   threadWaitRead fd
@@ -446,8 +476,11 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
   debug "receive: finished reading from stream socket"
   case e of
-    Left err     -> pure (Left (errorCode err))
-    Right recvSz -> pure (Right (csizeToInt recvSz))
+    Left err -> throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      "internalReceiveMaximally"
+      [describeErrorCode err]
+    Right recvSz -> pure (csizeToInt recvSz)
 
 -- | Receive exactly the given number of bytes. If the remote application
 --   shuts down its end of the connection before sending the required
@@ -456,21 +489,24 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
 receiveByteArray ::
      Connection -- ^ Connection
   -> Int -- ^ Number of bytes to receive
-  -> IO (Either SocketException ByteArray)
+  -> IO (Either (ReceiveException 'Uninterruptible) ByteArray)
 receiveByteArray !conn0 !total = do
   marr <- PM.newByteArray total
   go conn0 marr 0 total
   where
   go !conn !marr !off !remaining = case compare remaining 0 of
-    GT -> internalReceiveMaximally conn remaining marr off >>= \case
-      Left err -> pure (Left err)
-      Right sz -> if sz /= 0
+    GT -> do
+      sz <- internalReceiveMaximally conn remaining marr off
+      if sz /= 0
         then go conn marr (off + sz) (remaining - sz)
-        else pure (Left RemoteShutdown)
+        else pure (Left ReceiveShutdown)
     EQ -> do
       arr <- PM.unsafeFreezeByteArray marr
       pure (Right arr)
-    LT -> pure (Left NegativeBytesRequested)
+    LT -> throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      functionReceiveByteArray
+      [SCK.negativeSliceLength]
 
 -- | Receive a number of bytes exactly equal to the size of the mutable
 --   byte array. If the remote application shuts down its end of the
@@ -479,17 +515,17 @@ receiveByteArray !conn0 !total = do
 receiveMutableByteArray ::
      Connection
   -> MutableByteArray RealWorld
-  -> IO (Either SocketException ())
+  -> IO (Either (ReceiveException 'Uninterruptible) ())
 receiveMutableByteArray !conn0 !marr0 = do
   total <- PM.getSizeofMutableByteArray marr0
   go conn0 marr0 0 total
   where
   go !conn !marr !off !remaining = if remaining > 0
-    then internalReceiveMaximally conn remaining marr off >>= \case
-      Left err -> pure (Left err)
-      Right sz -> if sz /= 0
+    then do
+      sz <- internalReceiveMaximally conn remaining marr off
+      if sz /= 0
         then go conn marr (off + sz) (remaining - sz)
-        else pure (Left RemoteShutdown)
+        else pure (Left ReceiveShutdown)
     else pure (Right ())
 
 -- | Receive up to the given number of bytes, using the given array and
@@ -502,16 +538,18 @@ receiveMutableByteArraySlice ::
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
   -> Int -- ^ Offset in the buffer
-  -> IO (Either SocketException Int) -- ^ Either a socket exception or the number of bytes read
+  -> IO (Either (ReceiveException 'Uninterruptible) Int) -- ^ Either a socket exception or the number of bytes read
 receiveMutableByteArraySlice !conn !total !marr !off
-  | total > 0 =
-      internalReceiveMaximally conn total marr off >>= \case
-        Left err -> pure (Left err)
-        Right sz -> if sz /= 0
-          then pure (Right sz)
-          else pure (Left RemoteShutdown)
+  | total > 0 = do
+      sz <- internalReceiveMaximally conn total marr off
+      if sz /= 0
+        then pure (Right sz)
+        else pure (Left ReceiveShutdown)
   | total == 0 = pure (Right 0)
-  | otherwise = pure (Left NegativeBytesRequested)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      functionReceiveMutableByteArraySlice
+      [SCK.negativeSliceLength]
 
 -- | Receive up to the given number of bytes. If the remote application
 --   shuts down its end of the connection instead of sending any bytes,
@@ -520,7 +558,7 @@ receiveMutableByteArraySlice !conn !total !marr !off
 receiveBoundedByteArray ::
      Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
-  -> IO (Either SocketException ByteArray)
+  -> IO (Either (ReceiveException 'Uninterruptible) ByteArray)
 receiveBoundedByteArray !conn !total
   | total > 0 = do
       m <- PM.newByteArray total
@@ -530,7 +568,10 @@ receiveBoundedByteArray !conn !total
           shrinkMutableByteArray m sz
           Right <$> PM.unsafeFreezeByteArray m
   | total == 0 = pure (Right mempty)
-  | otherwise = pure (Left NegativeBytesRequested)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      functionReceiveBoundedByteArray
+      [SCK.negativeSliceLength]
 
 endpointToSocketAddressInternet :: Endpoint -> S.SocketAddressInternet
 endpointToSocketAddressInternet (Endpoint {address, port}) = S.SocketAddressInternet
@@ -557,9 +598,6 @@ shrinkMutableByteArray :: MutableByteArray RealWorld -> Int -> IO ()
 shrinkMutableByteArray (MutableByteArray arr) (I# sz) =
   PM.primitive_ (shrinkMutableByteArray# arr sz)
 
-errorCode :: Errno -> SocketException
-errorCode (Errno x) = ErrorCode x
-
 moduleSocketStreamIPv4 :: String
 moduleSocketStreamIPv4 = "Socket.Stream.IPv4"
 
@@ -572,6 +610,15 @@ functionSendByteArray = "sendByteArray"
 functionWithListener :: String
 functionWithListener = "withListener"
 
+functionReceiveBoundedByteArray :: String
+functionReceiveBoundedByteArray = "receiveBoundedByteArray"
+
+functionReceiveByteArray :: String
+functionReceiveByteArray = "receiveByteArray"
+
+functionReceiveMutableByteArraySlice :: String
+functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
+
 describeErrorCode :: Errno -> String
 describeErrorCode (Errno e) = "error code " ++ show e
 
@@ -579,6 +626,7 @@ handleSendException :: String -> Errno -> IO (Either (SendException i) a)
 {-# INLINE handleSendException #-}
 handleSendException func e
   | e == ePIPE = pure (Left SendShutdown)
+  | e == eCONNRESET = pure (Left SendReset)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
       func
@@ -593,7 +641,7 @@ handleSendException func e
 -- testing for some exceptions that cannot occur as a result of
 -- a particular call, but doing otherwise would be fraught with
 -- uncertainty.
-handleConnectException :: String -> Errno -> IO (Either (ConnectException i b) a)
+handleConnectException :: String -> Errno -> IO (Either (ConnectException i) a)
 handleConnectException func e
   | e == eACCES = pure (Left ConnectFirewalled)
   | e == ePERM = pure (Left ConnectFirewalled)
@@ -609,7 +657,7 @@ handleConnectException func e
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to open a connection (not listen for inbound connections).
-handleSocketConnectException :: String -> Errno -> IO (Either (ConnectException i b) a)
+handleSocketConnectException :: String -> Errno -> IO (Either (ConnectException i) a)
 handleSocketConnectException func e
   | e == eMFILE = pure (Left ConnectFileDescriptorLimit)
   | e == eNFILE = pure (Left ConnectFileDescriptorLimit)
@@ -621,10 +669,10 @@ handleSocketConnectException func e
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to listen for inbound connections.
-handleSocketListenException :: String -> Errno -> IO (Either ListenException a)
+handleSocketListenException :: String -> Errno -> IO (Either SocketException a)
 handleSocketListenException func e
-  | e == eMFILE = pure (Left ListenFileDescriptorLimit)
-  | e == eNFILE = pure (Left ListenFileDescriptorLimit)
+  | e == eMFILE = pure (Left SocketFileDescriptorLimit)
+  | e == eNFILE = pure (Left SocketFileDescriptorLimit)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
       func
@@ -638,12 +686,12 @@ handleSocketListenException func e
 -- to be the error codes we are interested in.
 --
 -- NB: EACCES only happens on @bind@, not on @listen@.
-handleBindListenException :: Word16 -> String -> Errno -> IO (Either ListenException a)
+handleBindListenException :: Word16 -> String -> Errno -> IO (Either SocketException a)
 handleBindListenException thePort func e
-  | e == eACCES = pure (Left ListenPermissionDenied)
+  | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
-      then pure (Left ListenAddressInUse)
-      else pure (Left ListenEphemeralPortsExhausted)
+      then pure (Left SocketAddressInUse)
+      else pure (Left SocketEphemeralPortsExhausted)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
       func
@@ -652,7 +700,7 @@ handleBindListenException thePort func e
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to open a connection (not listen for inbound connections).
-handleAcceptException :: String -> Errno -> IO (Either (AcceptException i b) a)
+handleAcceptException :: String -> Errno -> IO (Either (AcceptException i) a)
 handleAcceptException func e
   | e == eCONNABORTED = pure (Left AcceptConnectionAborted)
   | e == eMFILE = pure (Left AcceptFileDescriptorLimit)

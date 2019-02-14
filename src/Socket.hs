@@ -16,11 +16,14 @@ module Socket
   , cgetsockopt
   , cclose 
   , crecv 
+  , crecvfrom
   , cshutdown
+  , negativeSliceLength
   , nonInternetSocketFamily
   , functionWithAccepted
   , functionWithConnection
   , functionWithListener
+  , functionWithSocket
   , functionGracefulClose
   , socketAddressSize
   ) where
@@ -109,6 +112,9 @@ cclose = "getsockname"
 crecv :: String
 crecv = "recv"
 
+crecvfrom :: String
+crecvfrom = "recvfrom"
+
 cshutdown :: String
 cshutdown = "shutdown"
 
@@ -118,6 +124,9 @@ functionGracefulClose = "gracefulClose"
 nonInternetSocketFamily :: String
 nonInternetSocketFamily = "non-internet socket family"
 
+negativeSliceLength :: String
+negativeSliceLength = "negative slice length"
+
 functionWithAccepted :: String
 functionWithAccepted = "withAccepted"
 
@@ -126,6 +135,9 @@ functionWithConnection = "withConnection"
 
 functionWithListener :: String
 functionWithListener = "withListener"
+
+functionWithSocket :: String
+functionWithSocket = "withSocket"
 
 socketAddressSize :: String
 socketAddressSize = "socket address size"

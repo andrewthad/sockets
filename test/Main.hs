@@ -47,6 +47,11 @@ tests = testGroup "socket"
 unhandled :: Exception e => IO (Either e a) -> IO a
 unhandled action = action >>= either throwIO pure
 
+unhandledClose :: Maybe SI.CloseException -> a -> IO a
+unhandledClose m a = case m of
+  Nothing -> pure a
+  Just e -> throwIO e
+
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
@@ -63,7 +68,7 @@ testDatagramUndestinedA = do
   receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
   receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    unhandled $ DIU.receive sock sz
+    unhandled $ DIU.receiveByteArray sock sz
 
 testDatagramUndestinedB :: Assertion
 testDatagramUndestinedB = do
@@ -157,13 +162,13 @@ testStreamA = do
   sender :: PM.MVar RealWorld Word16 -> IO ()
   sender m = do
     dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) $ \conn -> do
+    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
       unhandled $ SI.sendByteArray conn szb
       unhandled $ SI.sendByteArray conn message
   receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
   receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
-    unhandled $ SI.withAccepted listener $ \conn _ -> do
+    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       serializedSize <- unhandled $ SI.receiveByteArray conn (PM.sizeOf (undefined :: Int))
       let theSize = PM.indexByteArray serializedSize 0 :: Int
       result <- unhandled $ SI.receiveByteArray conn theSize
@@ -192,7 +197,7 @@ testDatagramSpoofA = do
   receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
   receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    unhandled $ DIU.receive sock 500
+    unhandled $ DIU.receiveByteArray sock 500
       
 -- Here, the sender spoofs its ip address and port twice, picking a
 -- different port each time.
@@ -230,6 +235,6 @@ testDatagramSpoofB = do
   receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Message,DIU.Message)
   receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    msg1 <- unhandled $ DIU.receive sock 500
-    msg2 <- unhandled $ DIU.receive sock 500
+    msg1 <- unhandled $ DIU.receiveByteArray sock 500
+    msg2 <- unhandled $ DIU.receiveByteArray sock 500
     return (msg1,msg2)
