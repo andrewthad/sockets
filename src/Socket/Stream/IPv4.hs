@@ -33,6 +33,11 @@ module Socket.Stream.IPv4
   , SocketException(..)
   , CloseException(..)
   , Interruptibility(..)
+    -- * Unbracketed
+    -- $unbracketed
+  , listener
+  , unlistener
+  , unlistener_
   ) where
 
 import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
@@ -69,22 +74,32 @@ newtype Listener = Listener Fd
 -- | A connection-oriented stream socket.
 newtype Connection = Connection Fd
 
-withListener ::
-     Endpoint
-  -> (Listener -> Word16 -> IO a)
-  -> IO (Either SocketException a)
-withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
-  debug ("withSocket: opening listener " ++ describeEndpoint endpoint)
+-- | Open a socket that can be used to listen for inbound connections.
+-- Requirements:
+--
+-- * This function may only be called in contexts where exceptions
+--   are masked.
+-- * The caller /must/ be sure to call 'unlistener' on the resulting
+--   'Listener' exactly once to close underlying file descriptor.
+-- * The 'Listener' cannot be used after being given as an argument
+--   to 'unlistener'.
+--
+-- Noncompliant use of this function leads to undefined behavior. Prefer
+-- 'withListener' unless you are writing an integration with a
+-- resource-management library.
+listener :: Endpoint -> IO (Either SocketException (Listener, Word16))
+listener endpoint@Endpoint{port = specifiedPort} = do
+  debug ("listen: opening listener " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
-  debug ("withSocket: opened listener " ++ describeEndpoint endpoint)
+  debug ("listen: opened listener " ++ describeEndpoint endpoint)
   case e1 of
     Left err -> handleSocketListenException SCK.functionWithListener err
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
-      debug ("withSocket: requested binding for listener " ++ describeEndpoint endpoint)
+      debug ("listen: requested binding for listener " ++ describeEndpoint endpoint)
       case e2 of
         Left err -> do
           _ <- S.uninterruptibleClose fd
@@ -95,7 +110,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
           -- Open an issue if this causes problems for anyone.
           Left err -> do
             _ <- S.uninterruptibleClose fd
-            debug "withSocket: listen failed with error code"
+            debug "listen: listen failed with error code"
             handleBindListenException specifiedPort SCK.functionWithListener err
           Right _ -> do
             -- The getsockname is copied from code in Socket.Datagram.IPv4.Undestined.
@@ -110,7 +125,7 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                   then case S.decodeSocketAddressInternet sockAddr of
                     Just S.SocketAddressInternet{port = actualPort} -> do
                       let cleanActualPort = S.networkToHostShort actualPort
-                      debug ("withSocket: successfully bound listener " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanActualPort)
+                      debug ("listen: successfully bound listener " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanActualPort)
                       pure cleanActualPort
                     Nothing -> do
                       _ <- S.uninterruptibleClose fd
@@ -125,13 +140,41 @@ withListener endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                       functionWithListener
                       [cgetsockname,describeEndpoint endpoint,"socket address size"]
               else pure specifiedPort
-            a <- onException (restore (f (Listener fd) actualPort)) (S.uninterruptibleClose fd)
-            S.uninterruptibleClose fd >>= \case
-              Left err -> throwIO $ SocketUnrecoverableException
-                moduleSocketStreamIPv4
-                functionWithListener
-                [cclose,describeEndpoint endpoint,describeErrorCode err]
-              Right _ -> pure (Right a)
+            pure (Right (Listener fd, actualPort))
+
+-- | Close a listener. This throws an unrecoverable exception if
+--   the socket cannot be closed.
+unlistener :: Listener -> IO ()
+unlistener (Listener fd) = S.uninterruptibleClose fd >>= \case
+  Left err -> throwIO $ SocketUnrecoverableException
+    moduleSocketStreamIPv4
+    functionWithListener
+    [cclose,describeErrorCode err]
+  Right _ -> pure ()
+
+-- | Close a listener. This does not check to see whether or not
+-- the operating system successfully closed the socket. It never
+-- throws exceptions of any kind. This should only be preferred
+-- to 'unlistener' in exception-cleanup contexts where there is
+-- already an exception that will be rethrown. See the implementation
+-- of 'withListener' for an example of appropriate use of both
+-- 'unlistener' and 'unlistener_'.
+unlistener_ :: Listener -> IO ()
+unlistener_ (Listener fd) = S.uninterruptibleErrorlessClose fd
+
+withListener ::
+     Endpoint
+  -> (Listener -> Word16 -> IO a)
+  -> IO (Either SocketException a)
+withListener endpoint f = mask $ \restore -> do
+  listener endpoint >>= \case
+    Left err -> pure (Left err)
+    Right (sck, actualPort) -> do
+      a <- onException
+        (restore (f sck actualPort))
+        (unlistener_ sck)
+      unlistener sck
+      pure (Right a)
 
 -- This function factors out the common elements of withAccepted, forkAccepted,
 -- and forkAcceptedUnmasked. Unfortunately, I can barely understand it. The
@@ -304,11 +347,11 @@ withConnection ::
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (ConnectException 'Uninterruptible) b)
 withConnection !remote g f = mask $ \restore -> do
-  debug ("withSocket: opening connection " ++ show remote)
+  debug ("withConnection: opening connection " ++ show remote)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
-  debug ("withSocket: opened connection " ++ show remote)
+  debug ("withConnection: opened connection " ++ show remote)
   case e1 of
     Left err -> handleSocketConnectException SCK.functionWithConnection err
     Right fd -> do
@@ -735,4 +778,18 @@ handleAcceptException func e
 
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
+
+{- $unbracketed
+ 
+Provided here are the unbracketed functions for the creation and destruction
+of listeners, outbound connections, and inbound connections. These functions
+come with pretty serious requirements:
+
+* They may only be called in contexts where exceptions are masked.
+* The caller /must/ be sure to call the destruction function every
+  'Listener' or 'Connection' exactly once to close underlying file
+  descriptor.
+* The 'Listener' or 'Connection' cannot be used after being given
+  as an argument to the destruction function.
+-}
 
