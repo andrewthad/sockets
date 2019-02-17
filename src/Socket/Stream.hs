@@ -131,9 +131,35 @@ data SendException :: Interruptibility -> Type where
 deriving stock instance Show (SendException i)
 deriving anyclass instance Typeable i => Exception (SendException i)
 
+-- | Recoverable exceptions that can occur while receiving data on a
+-- stream socket.
+--
+-- ==== __Discussion__
+--
+-- The <http://man7.org/linux/man-pages/man2/recv.2.html recv man page>
+-- explicitly documents these:
+--
+-- * @EAGAIN@/@EAGAIN@: Not possible after using event manager to wait.
+-- * @EBADF@: Prevented by this library.
+-- * @ECONNREFUSED@: Not sure if this is possible. Currently treated as
+--   an unrecoverable exception.
+-- * @EFAULT@: Not recoverable. API consumer has misused @Addr@.
+-- * @EINTR@: Prevented by this library. Unsafe FFI is not interruptible.
+-- * @EINVAL@: Prevented by this library.
+-- * @ENOMEM@: Not recoverable.
+-- * @ENOTCONN@: Prevented by this library.
+-- * @ENOTSOCK@: Prevented by this library.
+--
+-- The man page includes a disclaimer: "Additional errors may be generated
+-- and returned from the underlying protocol modules". One such error
+-- when dealing with stream sockets in @ECONNRESET@. One scenario where
+-- this happens is when the process running on the peer terminates ungracefully
+-- and the operating system on the peer cleans up by sending a reset.
 data ReceiveException :: Interruptibility -> Type where
-  -- | The peer shutdown its writing channel.
+  -- | The peer shutdown its writing channel. (zero-length chunk)
   ReceiveShutdown :: ReceiveException i
+  -- | The peer reset the connection. (@ECONNRESET@)
+  ReceiveReset :: ReceiveException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   ReceiveInterrupted :: ReceiveException 'Interruptible
 

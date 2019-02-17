@@ -468,7 +468,7 @@ internalReceiveMaximally ::
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Receive buffer
   -> Int -- ^ Offset into buffer
-  -> IO Int
+  -> IO (Either (ReceiveException i) Int)
 internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   debug "receive: stream socket about to wait"
   threadWaitRead fd
@@ -476,11 +476,8 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
   e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
   debug "receive: finished reading from stream socket"
   case e of
-    Left err -> throwIO $ SocketUnrecoverableException
-      moduleSocketStreamIPv4
-      "internalReceiveMaximally"
-      [describeErrorCode err]
-    Right recvSz -> pure (csizeToInt recvSz)
+    Left err -> handleReceiveException "internalReceiveMaximally" err
+    Right recvSz -> pure (Right (csizeToInt recvSz))
 
 -- | Receive exactly the given number of bytes. If the remote application
 --   shuts down its end of the connection before sending the required
@@ -496,10 +493,11 @@ receiveByteArray !conn0 !total = do
   where
   go !conn !marr !off !remaining = case compare remaining 0 of
     GT -> do
-      sz <- internalReceiveMaximally conn remaining marr off
-      if sz /= 0
-        then go conn marr (off + sz) (remaining - sz)
-        else pure (Left ReceiveShutdown)
+      internalReceiveMaximally conn remaining marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then go conn marr (off + sz) (remaining - sz)
+          else pure (Left ReceiveShutdown)
     EQ -> do
       arr <- PM.unsafeFreezeByteArray marr
       pure (Right arr)
@@ -522,10 +520,11 @@ receiveMutableByteArray !conn0 !marr0 = do
   where
   go !conn !marr !off !remaining = if remaining > 0
     then do
-      sz <- internalReceiveMaximally conn remaining marr off
-      if sz /= 0
-        then go conn marr (off + sz) (remaining - sz)
-        else pure (Left ReceiveShutdown)
+      internalReceiveMaximally conn remaining marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then go conn marr (off + sz) (remaining - sz)
+          else pure (Left ReceiveShutdown)
     else pure (Right ())
 
 -- | Receive up to the given number of bytes, using the given array and
@@ -541,10 +540,11 @@ receiveMutableByteArraySlice ::
   -> IO (Either (ReceiveException 'Uninterruptible) Int) -- ^ Either a socket exception or the number of bytes read
 receiveMutableByteArraySlice !conn !total !marr !off
   | total > 0 = do
-      sz <- internalReceiveMaximally conn total marr off
-      if sz /= 0
-        then pure (Right sz)
-        else pure (Left ReceiveShutdown)
+      internalReceiveMaximally conn total marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then pure (Right sz)
+          else pure (Left ReceiveShutdown)
   | total == 0 = pure (Right 0)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
@@ -621,6 +621,14 @@ functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
 
 describeErrorCode :: Errno -> String
 describeErrorCode (Errno e) = "error code " ++ show e
+
+handleReceiveException :: String -> Errno -> IO (Either (ReceiveException i) a)
+handleReceiveException func e
+  | e == eCONNRESET = pure (Left ReceiveReset)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      func
+      [describeErrorCode e]
 
 handleSendException :: String -> Errno -> IO (Either (SendException i) a)
 {-# INLINE handleSendException #-}
