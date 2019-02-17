@@ -41,7 +41,7 @@ import Control.Exception (mask, onException, throwIO)
 import Data.Bifunctor (bimap,first)
 import Data.Primitive (ByteArray, MutableByteArray(..))
 import Data.Word (Word16)
-import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE)
+import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE, eNOTCONN)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Error (eADDRINUSE,eCONNRESET)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
@@ -153,7 +153,7 @@ internalAccepted wrap (Listener !lst) f = do
             debug ("internalAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
             wrap restore $ \restore' -> do
               a <- onException (restore' (f (Connection acpt) acceptedEndpoint)) (S.uninterruptibleClose acpt)
-              e <- gracefulClose acpt
+              e <- gracefulCloseA acpt
               pure (e,a)
           Nothing -> do
             _ <- S.uninterruptibleClose acpt
@@ -168,59 +168,73 @@ internalAccepted wrap (Listener !lst) f = do
             SCK.functionWithAccepted
             [SCK.cgetsockname,SCK.socketAddressSize]
 
-gracefulClose :: Fd -> IO (Maybe CloseException)
-gracefulClose fd = S.uninterruptibleShutdown fd S.write >>= \case
-  Left err -> do
-    _ <- S.uninterruptibleClose fd
-    -- TODO: What about ENOTCONN? Can this happen if the remote
-    -- side has already closed the connection?
-    throwIO $ SocketUnrecoverableException
-      moduleSocketStreamIPv4
-      SCK.functionGracefulClose
-      [SCK.cshutdown,describeErrorCode err]
-  Right _ -> do
-    buf <- PM.newByteArray 1
-    S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
-      Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
-        then do
-          threadWaitRead fd
-          S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
-            Left err -> do
-              _ <- S.uninterruptibleClose fd
-              throwIO $ SocketUnrecoverableException
+gracefulCloseA :: Fd -> IO (Maybe CloseException)
+gracefulCloseA fd = S.uninterruptibleShutdown fd S.write >>= \case
+  -- On Linux (not sure about others), calling shutdown
+  -- on the write channel fails with with ENOTCONN if the
+  -- write channel is already closed. It is common for this to
+  -- happen (e.g. if the peer calls @close@ before the local
+  -- process runs gracefulClose, the local operating system
+  -- will have already closed the write channel). However,
+  -- it does not pose a problem. We just proceed as we would
+  -- have since either way we become certain that the write channel
+  -- is closed.
+  Left err -> if err == eNOTCONN
+    then gracefulCloseB fd
+    else do
+      _ <- S.uninterruptibleClose fd
+      -- TODO: What about ENOTCONN? Can this happen if the remote
+      -- side has already closed the connection?
+      throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        SCK.functionGracefulClose
+        [SCK.cshutdown,describeErrorCode err]
+  Right _ -> gracefulCloseB fd
+
+gracefulCloseB :: Fd -> IO (Maybe CloseException)
+gracefulCloseB fd = do
+  buf <- PM.newByteArray 1
+  S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
+    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
+      then do
+        threadWaitRead fd
+        S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
+          Left err -> do
+            _ <- S.uninterruptibleClose fd
+            throwIO $ SocketUnrecoverableException
+              moduleSocketStreamIPv4
+              SCK.functionGracefulClose
+              [SCK.crecv,describeErrorCode err]
+          Right sz -> if sz == 0
+            then S.uninterruptibleClose fd >>= \case
+              Left err -> throwIO $ SocketUnrecoverableException
                 moduleSocketStreamIPv4
                 SCK.functionGracefulClose
-                [SCK.crecv,describeErrorCode err]
-            Right sz -> if sz == 0
-              then S.uninterruptibleClose fd >>= \case
-                Left err -> throwIO $ SocketUnrecoverableException
-                  moduleSocketStreamIPv4
-                  SCK.functionGracefulClose
-                  [SCK.cclose,describeErrorCode err]
-                Right _ -> pure Nothing
-              else do
-                debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
-                _ <- S.uninterruptibleClose fd
-                pure (Just ClosePeerContinuedSending)
-        else do
-          _ <- S.uninterruptibleClose fd
-          -- We threat all @recv@ errors except for the nonblocking
-          -- notices as unrecoverable.
-          throwIO $ SocketUnrecoverableException
-            moduleSocketStreamIPv4
-            SCK.functionGracefulClose
-            [SCK.crecv,describeErrorCode err1]
-      Right sz -> if sz == 0
-        then S.uninterruptibleClose fd >>= \case
-          Left err -> throwIO $ SocketUnrecoverableException
-            moduleSocketStreamIPv4
-            SCK.functionGracefulClose
-            [SCK.cclose,describeErrorCode err]
-          Right _ -> pure Nothing
-        else do
-          debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
-          _ <- S.uninterruptibleClose fd
-          pure (Just ClosePeerContinuedSending)
+                [SCK.cclose,describeErrorCode err]
+              Right _ -> pure Nothing
+            else do
+              debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
+              _ <- S.uninterruptibleClose fd
+              pure (Just ClosePeerContinuedSending)
+      else do
+        _ <- S.uninterruptibleClose fd
+        -- We treat all @recv@ errors except for the nonblocking
+        -- notices as unrecoverable.
+        throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          SCK.functionGracefulClose
+          [SCK.crecv,describeErrorCode err1]
+    Right sz -> if sz == 0
+      then S.uninterruptibleClose fd >>= \case
+        Left err -> throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          SCK.functionGracefulClose
+          [SCK.cclose,describeErrorCode err]
+        Right _ -> pure Nothing
+      else do
+        debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
+        _ <- S.uninterruptibleClose fd
+        pure (Just ClosePeerContinuedSending)
 
 -- | Accept a connection on the listener and run the supplied callback
 -- on it. This closes the connection when the callback finishes or if
@@ -329,7 +343,7 @@ withConnection !remote g f = mask $ \restore -> do
                 if err == 0
                   then do
                     a <- onException (restore (f (Connection fd))) (S.uninterruptibleClose fd)
-                    m <- gracefulClose fd
+                    m <- gracefulCloseA fd
                     b <- g m a
                     pure (Right b)
                   else do
