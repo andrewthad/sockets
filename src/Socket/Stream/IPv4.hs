@@ -35,9 +35,12 @@ module Socket.Stream.IPv4
   , Interruptibility(..)
     -- * Unbracketed
     -- $unbracketed
-  , listener
-  , unlistener
-  , unlistener_
+  , listen
+  , unlisten
+  , unlisten_
+  , connect
+  , disconnect
+  , disconnect_
   ) where
 
 import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
@@ -53,7 +56,7 @@ import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Types (CInt, CSize)
 import GHC.Exts (Int(I#), RealWorld, shrinkMutableByteArray#)
 import Net.Types (IPv4(..))
-import Socket (Interruptibility(..),Forkedness(..))
+import Socket (Interruptibility(..))
 import Socket (cgetsockname,cclose)
 import Socket (SocketUnrecoverableException(..))
 import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
@@ -87,19 +90,19 @@ newtype Connection = Connection Fd
 -- Noncompliant use of this function leads to undefined behavior. Prefer
 -- 'withListener' unless you are writing an integration with a
 -- resource-management library.
-listener :: Endpoint -> IO (Either SocketException (Listener, Word16))
-listener endpoint@Endpoint{port = specifiedPort} = do
-  debug ("listen: opening listener " ++ describeEndpoint endpoint)
+listen :: Endpoint -> IO (Either SocketException (Listener, Word16))
+listen endpoint@Endpoint{port = specifiedPort} = do
+  debug ("listen: opening listen " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
-  debug ("listen: opened listener " ++ describeEndpoint endpoint)
+  debug ("listen: opened listen " ++ describeEndpoint endpoint)
   case e1 of
     Left err -> handleSocketListenException SCK.functionWithListener err
     Right fd -> do
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
-      debug ("listen: requested binding for listener " ++ describeEndpoint endpoint)
+      debug ("listen: requested binding for listen " ++ describeEndpoint endpoint)
       case e2 of
         Left err -> do
           _ <- S.uninterruptibleClose fd
@@ -125,7 +128,7 @@ listener endpoint@Endpoint{port = specifiedPort} = do
                   then case S.decodeSocketAddressInternet sockAddr of
                     Just S.SocketAddressInternet{port = actualPort} -> do
                       let cleanActualPort = S.networkToHostShort actualPort
-                      debug ("listen: successfully bound listener " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanActualPort)
+                      debug ("listen: successfully bound listen " ++ describeEndpoint endpoint ++ " and got port " ++ show cleanActualPort)
                       pure cleanActualPort
                     Nothing -> do
                       _ <- S.uninterruptibleClose fd
@@ -144,8 +147,8 @@ listener endpoint@Endpoint{port = specifiedPort} = do
 
 -- | Close a listener. This throws an unrecoverable exception if
 --   the socket cannot be closed.
-unlistener :: Listener -> IO ()
-unlistener (Listener fd) = S.uninterruptibleClose fd >>= \case
+unlisten :: Listener -> IO ()
+unlisten (Listener fd) = S.uninterruptibleClose fd >>= \case
   Left err -> throwIO $ SocketUnrecoverableException
     moduleSocketStreamIPv4
     functionWithListener
@@ -159,28 +162,28 @@ unlistener (Listener fd) = S.uninterruptibleClose fd >>= \case
 -- already an exception that will be rethrown. See the implementation
 -- of 'withListener' for an example of appropriate use of both
 -- 'unlistener' and 'unlistener_'.
-unlistener_ :: Listener -> IO ()
-unlistener_ (Listener fd) = S.uninterruptibleErrorlessClose fd
+unlisten_ :: Listener -> IO ()
+unlisten_ (Listener fd) = S.uninterruptibleErrorlessClose fd
 
 withListener ::
      Endpoint
   -> (Listener -> Word16 -> IO a)
   -> IO (Either SocketException a)
 withListener endpoint f = mask $ \restore -> do
-  listener endpoint >>= \case
+  listen endpoint >>= \case
     Left err -> pure (Left err)
     Right (sck, actualPort) -> do
       a <- onException
         (restore (f sck actualPort))
-        (unlistener_ sck)
-      unlistener sck
+        (unlisten_ sck)
+      unlisten sck
       pure (Right a)
 
 -- This function factors out the common elements of withAccepted, forkAccepted,
 -- and forkAcceptedUnmasked. Unfortunately, I can barely understand it. The
 -- higher-rank callback is particularly impenetrable. Sorry.
 internalAccepted ::
-     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Maybe CloseException,d)) -> IO (Either (AcceptException 'Uninterruptible) c))
+     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Either CloseException (),d)) -> IO (Either (AcceptException 'Uninterruptible) c))
   -> Listener
   -> (Connection -> Endpoint -> IO a)
   -> IO (Either (AcceptException 'Uninterruptible) c)
@@ -211,7 +214,7 @@ internalAccepted wrap (Listener !lst) f = do
             SCK.functionWithAccepted
             [SCK.cgetsockname,SCK.socketAddressSize]
 
-gracefulCloseA :: Fd -> IO (Maybe CloseException)
+gracefulCloseA :: Fd -> IO (Either CloseException ())
 gracefulCloseA fd = S.uninterruptibleShutdown fd S.write >>= \case
   -- On Linux (not sure about others), calling shutdown
   -- on the write channel fails with with ENOTCONN if the
@@ -234,13 +237,16 @@ gracefulCloseA fd = S.uninterruptibleShutdown fd S.write >>= \case
         [SCK.cshutdown,describeErrorCode err]
   Right _ -> gracefulCloseB fd
 
-gracefulCloseB :: Fd -> IO (Maybe CloseException)
+gracefulCloseB :: Fd -> IO (Either CloseException ())
 gracefulCloseB fd = do
   buf <- PM.newByteArray 1
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
         threadWaitRead fd
+        -- TODO: We do not actually want to remove the bytes from the
+        -- receive buffer. We should use MSG_PEEK instead. Then we will
+        -- be certain to send a reset when a CloseException is reported.
         S.uninterruptibleReceiveMutableByteArray fd buf 0 1 mempty >>= \case
           Left err -> do
             _ <- S.uninterruptibleClose fd
@@ -254,11 +260,11 @@ gracefulCloseB fd = do
                 moduleSocketStreamIPv4
                 SCK.functionGracefulClose
                 [SCK.cclose,describeErrorCode err]
-              Right _ -> pure Nothing
+              Right _ -> pure (Right ())
             else do
               debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown A")
               _ <- S.uninterruptibleClose fd
-              pure (Just ClosePeerContinuedSending)
+              pure (Left ClosePeerContinuedSending)
       else do
         _ <- S.uninterruptibleClose fd
         -- We treat all @recv@ errors except for the nonblocking
@@ -273,11 +279,11 @@ gracefulCloseB fd = do
           moduleSocketStreamIPv4
           SCK.functionGracefulClose
           [SCK.cclose,describeErrorCode err]
-        Right _ -> pure Nothing
+        Right _ -> pure (Right ())
       else do
         debug ("Socket.Stream.IPv4.gracefulClose: remote not shutdown B")
         _ <- S.uninterruptibleClose fd
-        pure (Just ClosePeerContinuedSending)
+        pure (Left ClosePeerContinuedSending)
 
 -- | Accept a connection on the listener and run the supplied callback
 -- on it. This closes the connection when the callback finishes or if
@@ -288,7 +294,7 @@ gracefulCloseB fd = do
 -- (most use cases).
 withAccepted ::
      Listener
-  -> (Maybe CloseException -> a -> IO b)
+  -> (Either CloseException () -> a -> IO b)
      -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
@@ -306,7 +312,7 @@ withAccepted lst consumeException cb = internalAccepted
 -- to the author.
 forkAccepted ::
      Listener
-  -> (Maybe CloseException -> a -> IO ())
+  -> (Either CloseException () -> a -> IO ())
      -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
@@ -324,7 +330,7 @@ forkAccepted lst consumeException cb = internalAccepted
 -- callback. Typically, @a@ is instantiated to @()@.
 forkAcceptedUnmasked ::
      Listener
-  -> (Maybe CloseException -> a -> IO ())
+  -> (Either CloseException () -> a -> IO ())
      -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
@@ -337,21 +343,29 @@ forkAcceptedUnmasked lst consumeException cb = internalAccepted
     pure (Right tid)
   ) lst cb
 
--- | Establish a connection to a server.
-withConnection ::
+-- | Open a socket and connect to a peer. Requirements:
+--
+-- * This function may only be called in contexts where exceptions
+--   are masked.
+-- * The caller /must/ be sure to call 'disconnect' or 'disconnect_'
+--   on the resulting 'Connection' exactly once to close underlying
+--   file descriptor.
+-- * The 'Connection' cannot be used after being given as an argument
+--   to 'disconnect' or 'disconnect_'.
+--
+-- Noncompliant use of this function leads to undefined behavior. Prefer
+-- 'withConnection' unless you are writing an integration with a
+-- resource-management library.
+connect ::
      Endpoint
      -- ^ Remote endpoint
-  -> (Maybe CloseException -> a -> IO b)
-     -- ^ Callback to handle an ungraceful close. 
-  -> (Connection -> IO a)
-     -- ^ Callback to consume connection. Must not return the connection.
-  -> IO (Either (ConnectException 'Uninterruptible) b)
-withConnection !remote g f = mask $ \restore -> do
-  debug ("withConnection: opening connection " ++ show remote)
+  -> IO (Either (ConnectException 'Uninterruptible) Connection)
+connect !remote = do
+  debug ("connect: opening connection " ++ show remote)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
-  debug ("withConnection: opened connection " ++ show remote)
+  debug ("connect: opened connection " ++ show remote)
   case e1 of
     Left err -> handleSocketConnectException SCK.functionWithConnection err
     Right fd -> do
@@ -368,14 +382,14 @@ withConnection !remote g f = mask $ \restore -> do
         Right _ -> pure Nothing
       case merr of
         Just err -> do
-          _ <- S.uninterruptibleClose fd
+          S.uninterruptibleErrorlessClose fd
           handleConnectException SCK.functionWithConnection err
         Nothing -> do
           e <- S.uninterruptibleGetSocketOption fd
             S.levelSocket S.optionError (intToCInt (PM.sizeOf (undefined :: CInt)))
           case e of
             Left err -> do
-              _ <- S.uninterruptibleClose fd
+              S.uninterruptibleErrorlessClose fd
               throwIO $ SocketUnrecoverableException
                 moduleSocketStreamIPv4
                 functionWithListener
@@ -384,21 +398,54 @@ withConnection !remote g f = mask $ \restore -> do
               then
                 let err = PM.indexByteArray val 0 :: CInt in
                 if err == 0
-                  then do
-                    a <- onException (restore (f (Connection fd))) (S.uninterruptibleClose fd)
-                    m <- gracefulCloseA fd
-                    b <- g m a
-                    pure (Right b)
+                  then pure (Right (Connection fd))
                   else do
-                    _ <- S.uninterruptibleClose fd
+                    S.uninterruptibleErrorlessClose fd
                     handleConnectException SCK.functionWithConnection (Errno err)
               else do
-                _ <- S.uninterruptibleClose fd
+                S.uninterruptibleErrorlessClose fd
                 throwIO $ SocketUnrecoverableException
                   moduleSocketStreamIPv4
                   functionWithListener
                   [SCK.cgetsockopt,describeEndpoint remote,connectErrorOptionValueSize]
 
+-- | Close a connection gracefully, reporting a 'CloseException' when
+-- the connection has to be terminated by sending a TCP reset. This
+-- uses a combination of @shutdown@, @recv@, @close@ to detect when
+-- resets need to be sent.
+disconnect :: Connection -> IO (Either CloseException ())
+disconnect (Connection fd) = gracefulCloseA fd
+
+-- | Close a connection. This does not check to see whether or not
+-- the connection was brought down gracefully. It just calls @close@
+-- and is likely to cause a TCP reset to be sent. It never
+-- throws exceptions of any kind (even if @close@ fails).
+-- This should only be preferred
+-- to 'disconnect' in exception-cleanup contexts where there is
+-- already an exception that will be rethrown. See the implementation
+-- of 'withConnection' for an example of appropriate use of both
+-- 'disconnect' and 'disconnect_'.
+disconnect_ :: Connection -> IO ()
+disconnect_ (Connection fd) = S.uninterruptibleErrorlessClose fd
+
+-- | Establish a connection to a server.
+withConnection ::
+     Endpoint
+     -- ^ Remote endpoint
+  -> (Either CloseException () -> a -> IO b)
+     -- ^ Callback to handle an ungraceful close. 
+  -> (Connection -> IO a)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (ConnectException 'Uninterruptible) b)
+withConnection !remote g f = mask $ \restore -> do
+  connect remote >>= \case
+    Left err -> pure (Left err)
+    Right conn -> do
+      a <- onException (restore (f conn)) (disconnect_ conn)
+      m <- disconnect conn
+      b <- g m a
+      pure (Right b)
+    
 sendByteArray ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Payload

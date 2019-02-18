@@ -61,10 +61,10 @@ tests canSpoof = testGroup "socket"
 unhandled :: Exception e => IO (Either e a) -> IO a
 unhandled action = action >>= either throwIO pure
 
-unhandledClose :: Maybe SI.CloseException -> a -> IO a
+unhandledClose :: Either SI.CloseException () -> a -> IO a
 unhandledClose m a = case m of
-  Nothing -> pure a
-  Just e -> throwIO e
+  Right () -> pure a
+  Left e -> throwIO e
 
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do
