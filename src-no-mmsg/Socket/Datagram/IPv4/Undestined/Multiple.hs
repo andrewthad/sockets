@@ -54,12 +54,12 @@ receiveMany (Socket !fd) !maxDatagrams !maxSz = do
 --   first, this abandons the attempt to receive datagrams and returns
 --   @'Left' 'ReceptionAbandoned'@.
 receiveManyUnless :: 
-     Socket -- ^ Socket
+     STM () -- ^ If this completes, give up on receiving
+  -> Socket -- ^ Socket
   -> Int -- ^ Maximum number of datagrams to receive
   -> Int -- ^ Maximum size of each datagram to receive
-  -> STM () -- ^ If this completes, give up on receiving
   -> IO (Either SocketException (Array Message))
-receiveManyUnless (Socket !fd) !maxDatagrams !maxSz abandon = do
+receiveManyUnless abandon (Socket !fd) !maxDatagrams !maxSz = do
   debug "receiveMany: about to wait"
   (isReady,deregister) <- threadWaitReadSTM fd
   shouldReceive <- atomically ((isReady $> True) <|> (abandon $> False))

@@ -24,8 +24,9 @@ module Socket.Stream.IPv4
   , sendMutableByteArraySlice
   , receiveByteArray
   , receiveBoundedByteArray
-  , receiveMutableByteArraySlice
+  , receiveBoundedMutableByteArraySlice
   , receiveMutableByteArray
+  , interruptibleReceiveBoundedMutableByteArraySlice
     -- * Exceptions
   , SendException(..)
   , ReceiveException(..)
@@ -43,26 +44,29 @@ module Socket.Stream.IPv4
   , disconnect_
   ) where
 
-import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
+import Control.Applicative ((<|>))
+import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite, threadWaitReadSTM)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Exception (mask, onException, throwIO)
+import Control.Monad.STM (STM,atomically)
 import Data.Bifunctor (bimap,first)
+import Data.Functor (($>))
 import Data.Primitive (ByteArray, MutableByteArray(..))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE, eNOTCONN)
-import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Error (eADDRINUSE,eCONNRESET)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
+import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Types (CInt, CSize)
 import GHC.Exts (Int(I#), RealWorld, shrinkMutableByteArray#)
 import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
-import Socket (cgetsockname,cclose)
 import Socket (SocketUnrecoverableException(..))
-import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
-import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
+import Socket (cgetsockname,cclose)
 import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..),describeEndpoint)
+import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
+import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import System.Posix.Types(Fd)
 
 import qualified Control.Monad.Primitive as PM
@@ -583,6 +587,25 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
     Left err -> handleReceiveException "internalReceiveMaximally" err
     Right recvSz -> pure (Right (csizeToInt recvSz))
 
+internalInterruptibleReceiveMaximally ::
+     STM () -- ^ If this completes, give up on receiving
+  -> Connection -- ^ Connection
+  -> Int -- ^ Maximum number of bytes to receive
+  -> MutableByteArray RealWorld -- ^ Receive buffer
+  -> Int -- ^ Offset into buffer
+  -> IO (Either (ReceiveException 'Interruptible) Int)
+internalInterruptibleReceiveMaximally abandon (Connection !fd) !maxSz !buf !off = do
+  (isReady,deregister) <- threadWaitReadSTM fd
+  shouldReceive <- atomically ((isReady $> True) <|> (abandon $> False))
+  deregister
+  if shouldReceive
+    then do
+      e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
+      case e of
+        Left err -> handleReceiveException "internalReceiveMaximally" err
+        Right recvSz -> pure (Right (csizeToInt recvSz))
+    else pure (Left ReceiveInterrupted)
+
 -- | Receive exactly the given number of bytes. If the remote application
 --   shuts down its end of the connection before sending the required
 --   number of bytes, this returns
@@ -633,16 +656,13 @@ receiveMutableByteArray !conn0 !marr0 = do
 
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset.
---   If the remote application shuts down its end of the connection instead of
---   sending any bytes, this returns
---   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
-receiveMutableByteArraySlice ::
+receiveBoundedMutableByteArraySlice ::
      Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
   -> Int -- ^ Offset in the buffer
   -> IO (Either (ReceiveException 'Uninterruptible) Int) -- ^ Either a socket exception or the number of bytes read
-receiveMutableByteArraySlice !conn !total !marr !off
+receiveBoundedMutableByteArraySlice !conn !total !marr !off
   | total > 0 = do
       internalReceiveMaximally conn total marr off >>= \case
         Left err -> pure (Left err)
@@ -652,6 +672,30 @@ receiveMutableByteArraySlice !conn !total !marr !off
   | total == 0 = pure (Right 0)
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
+      functionReceiveMutableByteArraySlice
+      [SCK.negativeSliceLength]
+
+-- | Receive up to the given number of bytes, using the given array and
+--   starting at the given offset. This can be interrupted by the
+--   completion of an 'STM' transaction.
+interruptibleReceiveBoundedMutableByteArraySlice ::
+     STM () -- ^ If this completes, give up on receiving
+  -> Connection -- ^ Connection
+  -> Int -- ^ Maximum number of bytes to receive
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
+  -> Int -- ^ Offset in the buffer
+  -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
+interruptibleReceiveBoundedMutableByteArraySlice abandon !conn !total !marr !off
+  | total > 0 = do
+      internalInterruptibleReceiveMaximally abandon conn total marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then pure (Right sz)
+          else pure (Left ReceiveShutdown)
+  | total == 0 = pure (Right 0)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      -- TODO: fix this function name in the error reporting
       functionReceiveMutableByteArraySlice
       [SCK.negativeSliceLength]
 
@@ -666,7 +710,7 @@ receiveBoundedByteArray ::
 receiveBoundedByteArray !conn !total
   | total > 0 = do
       m <- PM.newByteArray total
-      receiveMutableByteArraySlice conn total m 0 >>= \case
+      receiveBoundedMutableByteArraySlice conn total m 0 >>= \case
         Left err -> pure (Left err)
         Right sz -> do
           shrinkMutableByteArray m sz
