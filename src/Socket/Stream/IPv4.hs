@@ -22,6 +22,7 @@ module Socket.Stream.IPv4
   , sendByteArraySlice
   , sendMutableByteArray
   , sendMutableByteArraySlice
+  , interruptibleSendMutableByteArraySlice
   , receiveByteArray
   , receiveBoundedByteArray
   , receiveBoundedMutableByteArraySlice
@@ -506,6 +507,43 @@ sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
         functionSendMutableByteArray
         [SCK.negativeSliceLength]
 
+interruptibleSendMutableByteArraySlice ::
+     STM () -- ^ If this completes, give up on receiving
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException 'Interruptible) ())
+interruptibleSendMutableByteArraySlice abandon !conn !payload !off0 !len0 = go off0 len0
+  where
+  go !off !len = if len > 0
+    then internalInterruptibleSendMutable abandon conn payload off len >>= \case
+      Left e -> pure (Left e)
+      Right sz' -> do
+        let sz = csizeToInt sz'
+        go (off + sz) (len - sz)
+    else if len == 0
+      then pure (Right ())
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionSendMutableByteArray
+        [SCK.negativeSliceLength]
+
+-- Precondition: the length must be greater than zero.
+internalInterruptibleSendMutable ::
+     STM ()
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException 'Interruptible) CSize)
+internalInterruptibleSendMutable abandon !conn !payload !off !len =
+  veryInternalSendMutable
+    (\fd -> interruptibleWaitRead abandon fd >>= \case
+      True -> pure (Right ())
+      False -> pure (Left (SendInterrupted))
+    ) conn payload off len
+
 -- Precondition: the length must be greater than zero.
 internalSendMutable ::
      Connection -- ^ Connection
@@ -513,7 +551,21 @@ internalSendMutable ::
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) CSize)
-internalSendMutable (Connection !s) !payload !off !len = do
+internalSendMutable !conn !payload !off !len =
+  veryInternalSendMutable
+    (\fd -> threadWaitRead fd *> pure (Right ()))
+    conn payload off len
+
+-- Precondition: the length must be greater than zero.
+veryInternalSendMutable :: 
+     (Fd -> IO (Either (SendException i) ()))
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException i) CSize)
+{-# INLINE veryInternalSendMutable #-}
+veryInternalSendMutable wait (Connection !s) !payload !off !len = do
   e1 <- S.uninterruptibleSendMutableByteArray s payload
     (intToCInt off)
     (intToCSize len)
@@ -521,14 +573,16 @@ internalSendMutable (Connection !s) !payload !off !len = do
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        threadWaitWrite s
-        e2 <- S.uninterruptibleSendMutableByteArray s payload
-          (intToCInt off)
-          (intToCSize len)
-          (S.noSignal)
-        case e2 of
-          Left err2 -> handleSendException functionSendMutableByteArray err2
-          Right sz  -> pure (Right sz)
+        wait s >>= \case
+          Left err2 -> pure (Left err2)
+          Right () -> do
+            e3 <- S.uninterruptibleSendMutableByteArray s payload
+              (intToCInt off)
+              (intToCSize len)
+              (S.noSignal)
+            case e3 of
+              Left err3 -> handleSendException functionSendMutableByteArray err3
+              Right sz -> pure (Right sz)
       else handleSendException "sendMutableByteArray" err1
     Right sz -> pure (Right sz)
 
@@ -595,9 +649,7 @@ internalInterruptibleReceiveMaximally ::
   -> Int -- ^ Offset into buffer
   -> IO (Either (ReceiveException 'Interruptible) Int)
 internalInterruptibleReceiveMaximally abandon (Connection !fd) !maxSz !buf !off = do
-  (isReady,deregister) <- threadWaitReadSTM fd
-  shouldReceive <- atomically ((isReady $> True) <|> (abandon $> False))
-  deregister
+  shouldReceive <- interruptibleWaitRead abandon fd
   if shouldReceive
     then do
       e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
@@ -869,6 +921,13 @@ handleAcceptException func e
 
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
+
+interruptibleWaitRead :: STM () -> Fd -> IO Bool
+interruptibleWaitRead abandon fd = do
+  (isReady,deregister) <- threadWaitReadSTM fd
+  shouldReceive <- atomically ((abandon $> False) <|> (isReady $> True))
+  deregister
+  pure shouldReceive
 
 {- $unbracketed
  

@@ -62,7 +62,7 @@ receiveManyUnless ::
 receiveManyUnless abandon (Socket !fd) !maxDatagrams !maxSz = do
   debug "receiveMany: about to wait"
   (isReady,deregister) <- threadWaitReadSTM fd
-  shouldReceive <- atomically ((isReady $> True) <|> (abandon $> False))
+  shouldReceive <- atomically ((abandon $> False) <|> (isReady $> True))
   deregister
   if shouldReceive
     then receiveManyShim fd maxDatagrams maxSz
