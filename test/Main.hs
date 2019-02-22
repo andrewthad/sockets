@@ -1,8 +1,12 @@
 {-# language BangPatterns #-}
+{-# language DerivingStrategies #-}
+{-# language DeriveAnyClass #-}
 {-# language LambdaCase #-}
 {-# language ScopedTypeVariables #-}
+{-# language TypeFamilies #-}
 
 import Control.Concurrent.Async (concurrently)
+import Control.Monad (replicateM_)
 import Control.Exception (Exception)
 import Control.Exception (throwIO)
 import Control.Monad.ST (runST)
@@ -54,6 +58,11 @@ tests canSpoof = testGroup "socket"
   , testGroup "stream"
     [ testGroup "ipv4"
       [ testCase "A" testStreamA
+      , testGroup "B"
+        [ testCase "1MB" (testStreamB 1)
+        , testCase "4MB" (testStreamB 4)
+        , testCase "32MB" (testStreamB 32)
+        ]
       ]
     ]
   ]
@@ -65,6 +74,14 @@ unhandledClose :: Either SI.CloseException () -> a -> IO a
 unhandledClose m a = case m of
   Right () -> pure a
   Left e -> throwIO e
+
+data MagicByteMismatch = MagicByteMismatch
+  deriving stock (Show,Eq)
+  deriving anyclass (Exception)
+
+data NegativeByteCount = NegativeByteCount
+  deriving stock (Show,Eq)
+  deriving anyclass (Exception)
 
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do
@@ -187,6 +204,53 @@ testStreamA = do
       let theSize = PM.indexByteArray serializedSize 0 :: Int
       result <- unhandled $ SI.receiveByteArray conn theSize
       pure result
+
+-- The sender sends a large amount of traffic that may exceed
+-- the size of the operating system's TCP send buffer. The 
+-- amount is configurable because the test suite wants to
+-- check this for several values.
+testStreamB :: Int -> Assertion
+testStreamB megabytes = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),()) <- concurrently (sender m) (receiver m)
+  pure ()
+  where
+  message = E.fromList (replicate (32 * 1024) magicByte) :: ByteArray
+  chunkSize = PM.sizeofByteArray message
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = do
+    dstPort <- PM.takeMVar m
+    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+      replicateM_ (32 * megabytes) $ unhandled $ SI.sendByteArray conn message
+  receiver :: PM.MVar RealWorld Word16 -> IO ()
+  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+    PM.putMVar m port
+    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
+      buffer <- PM.newByteArray chunkSize
+      let receiveLoop !remaining
+            | remaining > 0 = do
+                let recvSize = min remaining chunkSize
+                PM.setByteArray buffer 0 chunkSize (0 :: Word8)
+                bytesReceived <- unhandled (SI.receiveBoundedMutableByteArraySlice conn recvSize buffer 0)
+                verifyClientSendBytes buffer bytesReceived >>= \case
+                  True -> receiveLoop (remaining - bytesReceived)
+                  False -> throwIO MagicByteMismatch
+            | remaining == 0 = pure ()
+            | otherwise = throwIO NegativeByteCount
+      receiveLoop (32 * megabytes * chunkSize)
+      pure ()
+
+magicByte :: Word8
+magicByte = 0xFA
+
+verifyClientSendBytes :: PM.MutableByteArray RealWorld -> Int -> IO Bool
+verifyClientSendBytes arr len = go (len - 1)
+  where
+  go !ix = if ix >= 0
+    then do
+      w <- PM.readByteArray arr ix
+      if w == magicByte then go (ix - 1) else pure False
+    else pure True
 
 -- Here, the sender spoofs its ip address and port.
 testDatagramSpoofA :: Assertion

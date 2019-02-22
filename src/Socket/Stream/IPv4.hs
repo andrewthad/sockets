@@ -5,6 +5,7 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE GADTs #-}
 
 module Socket.Stream.IPv4
   ( -- * Types
@@ -17,22 +18,27 @@ module Socket.Stream.IPv4
   , withConnection
   , forkAccepted
   , forkAcceptedUnmasked
+  , interruptibleForkAcceptedUnmasked
     -- * Communicate
   , sendByteArray
   , sendByteArraySlice
   , sendMutableByteArray
   , sendMutableByteArraySlice
+  , interruptibleSendByteArray
+  , interruptibleSendByteArraySlice
   , interruptibleSendMutableByteArraySlice
   , receiveByteArray
   , receiveBoundedByteArray
   , receiveBoundedMutableByteArraySlice
   , receiveMutableByteArray
+  , interruptibleReceiveByteArray
   , interruptibleReceiveBoundedMutableByteArraySlice
     -- * Exceptions
   , SendException(..)
   , ReceiveException(..)
   , ConnectException(..)
   , SocketException(..)
+  , AcceptException(..)
   , CloseException(..)
   , Interruptibility(..)
     -- * Unbracketed
@@ -43,14 +49,19 @@ module Socket.Stream.IPv4
   , connect
   , disconnect
   , disconnect_
+  , accept
+  , interruptibleAccept
   ) where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite, threadWaitReadSTM)
+import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
+import Control.Concurrent (threadWaitReadSTM,threadWaitWriteSTM)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
-import Control.Exception (mask, onException, throwIO)
-import Control.Monad.STM (STM,atomically)
+import Control.Exception (mask, mask_, onException, throwIO)
+import Control.Monad.STM (STM,atomically,retry)
+import Control.Concurrent.STM (TVar,modifyTVar',readTVar)
 import Data.Bifunctor (bimap,first)
+import Data.Bool (bool)
 import Data.Functor (($>))
 import Data.Primitive (ByteArray, MutableByteArray(..))
 import Data.Word (Word16)
@@ -184,6 +195,63 @@ withListener endpoint f = mask $ \restore -> do
       unlisten sck
       pure (Right a)
 
+-- | Listen for an inbound connection.
+accept :: Listener -> IO (Either (AcceptException 'Uninterruptible) (Connection,Endpoint))
+accept (Listener fd) = do
+  -- Although this function must be called in a context where
+  -- exceptions are masked, recall that threadWaitRead uses
+  -- takeMVar, meaning that this first part is still interruptible.
+  -- This is a good thing in the case of this function.
+  threadWaitRead fd
+  waitlessAccept fd
+
+-- | Listen for an inbound connection. Can be interrupted by an
+-- STM-style interrupt.
+interruptibleAccept ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Listener
+  -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
+interruptibleAccept abandon (Listener fd) = do
+  interruptibleWaitRead abandon fd >>= \case
+    True -> waitlessAccept fd
+    False -> pure (Left AcceptInterrupted)
+
+-- Only used internally
+interruptibleAcceptCounting :: 
+     TVar Int
+  -> TVar Bool
+  -> Listener
+  -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
+interruptibleAcceptCounting counter abandon (Listener fd) = do
+  interruptibleWaitReadCounting counter abandon fd >>= \case
+    True -> waitlessAccept fd
+    False -> pure (Left AcceptInterrupted)
+
+waitlessAccept :: Fd -> IO (Either (AcceptException i) (Connection,Endpoint))
+waitlessAccept lstn = do
+  S.uninterruptibleAccept lstn S.sizeofSocketAddressInternet >>= \case
+    Left err -> handleAcceptException "withAccepted" err
+    Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
+      then case S.decodeSocketAddressInternet sockAddr of
+        Just sockAddrInet -> do
+          let !acceptedEndpoint = socketAddressInternetToEndpoint sockAddrInet
+          debug ("internalAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
+          pure (Right (Connection acpt, acceptedEndpoint))
+        Nothing -> do
+          _ <- S.uninterruptibleClose acpt
+          throwIO $ SocketUnrecoverableException
+            moduleSocketStreamIPv4
+            SCK.functionWithAccepted
+            [SCK.cgetsockname,SCK.nonInternetSocketFamily]
+      else do
+        _ <- S.uninterruptibleClose acpt
+        throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          SCK.functionWithAccepted
+          [SCK.cgetsockname,SCK.socketAddressSize]
+
 -- This function factors out the common elements of withAccepted, forkAccepted,
 -- and forkAcceptedUnmasked. Unfortunately, I can barely understand it. The
 -- higher-rank callback is particularly impenetrable. Sorry.
@@ -304,12 +372,18 @@ withAccepted ::
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) b)
-withAccepted lst consumeException cb = internalAccepted
-  ( \restore action -> do
-    (e,a) <- action restore
-    b <- consumeException e a
-    pure (Right b)
-  ) lst cb
+withAccepted lstn consumeException cb = do
+  r <- mask $ \restore -> do
+    accept lstn >>= \case
+      Left e -> pure (Left e)
+      Right (conn, endpoint) -> do
+        a <- onException (restore (cb conn endpoint)) (disconnect_ conn)
+        e <- disconnect conn
+        pure (Right (e,a))
+  -- Notice that consumeException gets run in an unmasked context.
+  case r of
+    Left e -> pure (Left e)
+    Right (e,a) -> fmap Right (consumeException e a)
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. Prefer 'forkAcceptedUnmasked' unless the masking state
@@ -340,13 +414,94 @@ forkAcceptedUnmasked ::
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
-forkAcceptedUnmasked lst consumeException cb = internalAccepted
-  ( \_ action -> do
-    tid <- forkIOWithUnmask $ \unmask -> do
-      (e,x) <- action unmask
-      unmask (consumeException e x)
-    pure (Right tid)
-  ) lst cb
+forkAcceptedUnmasked lstn consumeException cb =
+  mask_ $ accept lstn >>= \case
+    Left e -> pure (Left e)
+    Right (conn, endpoint) -> fmap Right $ forkIOWithUnmask $ \unmask -> do
+      a <- onException (unmask (cb conn endpoint)) (disconnect_ conn)
+      e <- disconnect conn
+      unmask (consumeException e a)
+
+-- | Accept a connection on the listener and run the supplied callback in
+-- a new thread. The masking state is set to @Unmasked@ when running the
+-- callback. Typically, @a@ is instantiated to @()@.
+--
+-- ==== __Discussion__
+--
+-- Why is the @counter@ argument present? At first, it seems
+-- like this is something that the API consumer should implement on
+-- top of this library. The argument for the inclusion of the counter
+-- is has two parts: (1) clients supporting graceful termination
+-- always need these semantics and (2) these semantics cannot
+-- be provided without building in @counter@ as a @TVar@.
+--
+-- 1. Clients supporting graceful termination always need these
+--    semantics. To gracefully bring down a server that has been
+--    accepting connections with a forking function, an application
+--    must wait for all active connections to finish. Since all
+--    connections run on separate threads, this can only be
+--    accomplished by a concurrency primitive. The straightforward
+--    solution is to wrap a counter with either @MVar@ or @TVar@.
+--    To complete graceful termination, the application must
+--    block until the counter reaches zero.
+-- 2. These semantics cannot be provided without building in
+--    @counter@ as a @TVar@. When @abandon@ becomes @True@,
+--    graceful termination begins. From this point onward, if at
+--    any point the counter reaches zero, the application consuming
+--    this API will complete termination. Consequently, we need
+--    the guarantee that the counter does not increment after
+--    the @abandon@ transaction completes. If it did increment
+--    in this forbidden way (e.g. if it was incremented some
+--    unspecified amount of time after a connection was accepted),
+--    there would be a race condition in which the application
+--    may terminate without giving the newly accepted connection
+--    a chance to finish. Fortunately, @STM@ gives us the
+--    composable transaction we need to get this guarantee.
+--    To wait for an inbound connection, we use:
+--
+--    > (isReady,deregister) <- threadWaitReadSTM fd
+--    > shouldReceive <- atomically $ do
+--    >   readTVar abandon >>= \case
+--    >     True -> do
+--    >       isReady
+--    >       modifyTVar' counter (+1)
+--    >       pure True
+--    >     False -> pure False
+--
+--    This eliminates the window for the race condition. If a
+--    connection is accepted, the counter is guaranteed to
+--    be incremented _before_ @abandon@ becomes @True@.
+--    However, this code would be more simple and would perform
+--    better if GHC's event manager used TVar instead of STM.
+interruptibleForkAcceptedUnmasked ::
+     TVar Int
+     -- ^ Connection counter. Incremented when connection
+     --   is accepted. Decremented after connection is closed.
+  -> TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Listener
+     -- ^ Connection listener
+  -> (Either CloseException () -> a -> IO ())
+     -- ^ Callback to handle an ungraceful close. 
+  -> (Connection -> Endpoint -> IO a)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (AcceptException 'Interruptible) ThreadId)
+interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
+  mask_ $ interruptibleAcceptCounting counter abandon lstn >>= \case
+    Left e -> do
+      case e of
+        AcceptInterrupted -> pure ()
+        _ -> atomically (modifyTVar' counter (subtract 1))
+      pure (Left e)
+    Right (conn, endpoint) -> fmap Right $ forkIOWithUnmask $ \unmask -> do
+      a <- onException
+        (unmask (cb conn endpoint))
+        (disconnect_ conn *> atomically (modifyTVar' counter (subtract 1)))
+      e <- disconnect conn
+      r <- unmask (consumeException e a)
+      atomically (modifyTVar' counter (subtract 1))
+      pure r
 
 -- | Open a socket and connect to a peer. Requirements:
 --
@@ -458,6 +613,16 @@ sendByteArray ::
 sendByteArray conn arr =
   sendByteArraySlice conn arr 0 (PM.sizeofByteArray arr)
 
+interruptibleSendByteArray ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True', give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Connection -- ^ Connection
+  -> ByteArray -- ^ Payload
+  -> IO (Either (SendException 'Interruptible) ())
+interruptibleSendByteArray abandon conn arr =
+  interruptibleSendByteArraySlice abandon conn arr 0 (PM.sizeofByteArray arr)
+
 sendByteArraySlice ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Payload (will be sliced)
@@ -468,6 +633,30 @@ sendByteArraySlice !conn !payload !off0 !len0 = go off0 len0
   where
   go !off !len = if len > 0
     then internalSend conn payload off len >>= \case
+      Left e -> pure (Left e)
+      Right sz' -> do
+        let sz = csizeToInt sz'
+        go (off + sz) (len - sz)
+    else if len == 0
+      then pure (Right ())
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionSendByteArray
+        [SCK.negativeSliceLength]
+
+interruptibleSendByteArraySlice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True', give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Connection -- ^ Connection
+  -> ByteArray -- ^ Payload (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException 'Interruptible) ())
+interruptibleSendByteArraySlice !abandon !conn !payload !off0 !len0 = go off0 len0
+  where
+  go !off !len = if len > 0
+    then internalInterruptibleSend abandon conn payload off len >>= \case
       Left e -> pure (Left e)
       Right sz' -> do
         let sz = csizeToInt sz'
@@ -508,13 +697,15 @@ sendMutableByteArraySlice !conn !payload !off0 !len0 = go off0 len0
         [SCK.negativeSliceLength]
 
 interruptibleSendMutableByteArraySlice ::
-     STM () -- ^ If this completes, give up on receiving
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'AcceptInterrupted'@.
   -> Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Interruptible) ())
-interruptibleSendMutableByteArraySlice abandon !conn !payload !off0 !len0 = go off0 len0
+interruptibleSendMutableByteArraySlice !abandon !conn !payload !off0 !len0 = go off0 len0
   where
   go !off !len = if len > 0
     then internalInterruptibleSendMutable abandon conn payload off len >>= \case
@@ -531,17 +722,19 @@ interruptibleSendMutableByteArraySlice abandon !conn !payload !off0 !len0 = go o
 
 -- Precondition: the length must be greater than zero.
 internalInterruptibleSendMutable ::
-     STM ()
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'AcceptInterrupted'@.
   -> Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Interruptible) CSize)
-internalInterruptibleSendMutable abandon !conn !payload !off !len =
+internalInterruptibleSendMutable !abandon !conn !payload !off !len =
   veryInternalSendMutable
-    (\fd -> interruptibleWaitRead abandon fd >>= \case
+    (\fd -> interruptibleWaitWrite abandon fd >>= \case
       True -> pure (Right ())
-      False -> pure (Left (SendInterrupted))
+      False -> pure (Left SendInterrupted)
     ) conn payload off len
 
 -- Precondition: the length must be greater than zero.
@@ -593,27 +786,56 @@ internalSend ::
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) CSize)
-internalSend (Connection !s) !payload !off !len = do
-  debug ("internalSend: about to send chunk on stream socket, offset " ++ show off ++ " and length " ++ show len)
+internalSend !conn !payload !off !len = veryInternalSend
+  (\fd -> threadWaitRead fd *> pure (Right ()))
+  conn payload off len
+
+-- Precondition: the length must be greater than zero.
+internalInterruptibleSend ::
+     TVar Bool -- ^ Aliveness
+  -> Connection -- ^ Connection
+  -> ByteArray -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException 'Interruptible) CSize)
+internalInterruptibleSend !abandon !conn !payload !off !len = veryInternalSend
+  (\fd -> interruptibleWaitWrite abandon fd >>= \case
+    True -> pure (Right ())
+    False -> pure (Left SendInterrupted)
+  ) conn payload off len
+
+-- Precondition: the length must be greater than zero.
+veryInternalSend ::
+     (Fd -> IO (Either (SendException i) ()))
+  -> Connection -- ^ Connection
+  -> ByteArray -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException i) CSize)
+{-# INLINE veryInternalSend #-}
+veryInternalSend wait (Connection !s) !payload !off !len = do
+  debug ("veryInternalSend: about to send chunk on stream socket, offset " ++ show off ++ " and length " ++ show len)
   e1 <- S.uninterruptibleSendByteArray s payload
     (intToCInt off)
     (intToCSize len)
     (S.noSignal)
-  debug "internalSend: just sent chunk on stream socket"
+  debug "veryInternalSend: just sent chunk on stream socket"
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        debug "internalSend: waiting to for write ready on stream socket"
-        threadWaitWrite s
-        e2 <- S.uninterruptibleSendByteArray s payload
-          (intToCInt off)
-          (intToCSize len)
-          (S.noSignal)
-        case e2 of
-          Left err2 -> do
-            debug "internalSend: encountered error after sending chunk on stream socket"
-            handleSendException functionSendByteArray err2
-          Right sz -> pure (Right sz)
+        debug "veryInternalSend: waiting to for write ready on stream socket"
+        wait s >>= \case
+          Left e -> pure (Left e)
+          Right _ -> do
+            e2 <- S.uninterruptibleSendByteArray s payload
+              (intToCInt off)
+              (intToCSize len)
+              (S.noSignal)
+            case e2 of
+              Left err2 -> do
+                debug "veryInternalSend: encountered error after sending chunk on stream socket"
+                handleSendException functionSendByteArray err2
+              Right sz -> pure (Right sz)
       else handleSendException functionSendByteArray err1
     Right sz -> pure (Right sz)
 
@@ -642,12 +864,13 @@ internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
     Right recvSz -> pure (Right (csizeToInt recvSz))
 
 internalInterruptibleReceiveMaximally ::
-     STM () -- ^ If this completes, give up on receiving
+     TVar Bool -- ^ If this completes, give up on receiving
   -> Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Receive buffer
   -> Int -- ^ Offset into buffer
   -> IO (Either (ReceiveException 'Interruptible) Int)
+{-# INLINE internalInterruptibleReceiveMaximally #-}
 internalInterruptibleReceiveMaximally abandon (Connection !fd) !maxSz !buf !off = do
   shouldReceive <- interruptibleWaitRead abandon fd
   if shouldReceive
@@ -660,19 +883,38 @@ internalInterruptibleReceiveMaximally abandon (Connection !fd) !maxSz !buf !off 
 
 -- | Receive exactly the given number of bytes. If the remote application
 --   shuts down its end of the connection before sending the required
---   number of bytes, this returns
---   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
+--   number of bytes, this returns @'Left' 'ReceiveShutdown'@.
 receiveByteArray ::
      Connection -- ^ Connection
   -> Int -- ^ Number of bytes to receive
   -> IO (Either (ReceiveException 'Uninterruptible) ByteArray)
-receiveByteArray !conn0 !total = do
+receiveByteArray !conn !total =
+  internalReceiveByteArray internalReceiveMaximally conn total
+
+-- | Variant of 'receiveByteArray' that support STM-style interrupts.
+interruptibleReceiveByteArray ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> Int -- ^ Number of bytes to receive
+  -> IO (Either (ReceiveException 'Interruptible) ByteArray)
+interruptibleReceiveByteArray !abandon !conn !total =
+  internalReceiveByteArray (internalInterruptibleReceiveMaximally abandon) conn total
+
+-- This is used by both receiveByteArray and interruptibleReceiveByteArray.
+internalReceiveByteArray ::
+     (Connection -> Int -> MutableByteArray RealWorld -> Int -> IO (Either (ReceiveException i) Int))
+  -> Connection
+  -> Int
+  -> IO (Either (ReceiveException i) ByteArray)
+internalReceiveByteArray recvMax !conn0 !total = do
   marr <- PM.newByteArray total
   go conn0 marr 0 total
   where
   go !conn !marr !off !remaining = case compare remaining 0 of
     GT -> do
-      internalReceiveMaximally conn remaining marr off >>= \case
+      recvMax conn remaining marr off >>= \case
         Left err -> pure (Left err)
         Right sz -> if sz /= 0
           then go conn marr (off + sz) (remaining - sz)
@@ -731,13 +973,15 @@ receiveBoundedMutableByteArraySlice !conn !total !marr !off
 --   starting at the given offset. This can be interrupted by the
 --   completion of an 'STM' transaction.
 interruptibleReceiveBoundedMutableByteArraySlice ::
-     STM () -- ^ If this completes, give up on receiving
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
   -> Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
   -> Int -- ^ Offset in the buffer
   -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
-interruptibleReceiveBoundedMutableByteArraySlice abandon !conn !total !marr !off
+interruptibleReceiveBoundedMutableByteArraySlice !abandon !conn !total !marr !off
   | total > 0 = do
       internalInterruptibleReceiveMaximally abandon conn total marr off >>= \case
         Left err -> pure (Left err)
@@ -922,10 +1166,32 @@ handleAcceptException func e
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
 
-interruptibleWaitRead :: STM () -> Fd -> IO Bool
-interruptibleWaitRead abandon fd = do
+interruptibleWaitRead :: TVar Bool -> Fd -> IO Bool
+interruptibleWaitRead !abandon !fd = do
   (isReady,deregister) <- threadWaitReadSTM fd
-  shouldReceive <- atomically ((abandon $> False) <|> (isReady $> True))
+  shouldReceive <- atomically
+    ((bool retry (pure False) =<< readTVar abandon) <|> (isReady $> True))
+  deregister
+  pure shouldReceive
+
+interruptibleWaitWrite :: TVar Bool -> Fd -> IO Bool
+interruptibleWaitWrite !abandon !fd = do
+  (isReady,deregister) <- threadWaitWriteSTM fd
+  shouldSend <- atomically
+    ((bool retry (pure False) =<< readTVar abandon) <|> (isReady $> True))
+  deregister
+  pure shouldSend
+
+interruptibleWaitReadCounting :: TVar Int -> TVar Bool -> Fd -> IO Bool
+interruptibleWaitReadCounting !counter !abandon !fd = do
+  (isReady,deregister) <- threadWaitReadSTM fd
+  shouldReceive <- atomically $ do
+    readTVar abandon >>= \case
+      False -> do
+        isReady
+        modifyTVar' counter (+1)
+        pure True
+      True -> pure False
   deregister
   pure shouldReceive
 
