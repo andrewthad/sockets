@@ -67,7 +67,7 @@ library
   else
     hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-to-file -ddump-simpl -dsuppress-all
+  ghc-options: -O2 -Wall
 
 test-suite test
   type: exitcode-stdio-1.0
