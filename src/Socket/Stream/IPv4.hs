@@ -746,7 +746,7 @@ internalSendMutable ::
   -> IO (Either (SendException 'Uninterruptible) CSize)
 internalSendMutable !conn !payload !off !len =
   veryInternalSendMutable
-    (\fd -> threadWaitRead fd *> pure (Right ()))
+    (\fd -> threadWaitWrite fd *> pure (Right ()))
     conn payload off len
 
 -- Precondition: the length must be greater than zero.
@@ -762,7 +762,7 @@ veryInternalSendMutable wait (Connection !s) !payload !off !len = do
   e1 <- S.uninterruptibleSendMutableByteArray s payload
     (intToCInt off)
     (intToCSize len)
-    mempty
+    (S.noSignal)
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
@@ -787,7 +787,7 @@ internalSend ::
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) CSize)
 internalSend !conn !payload !off !len = veryInternalSend
-  (\fd -> threadWaitRead fd *> pure (Right ()))
+  (\fd -> threadWaitWrite fd *> pure (Right ()))
   conn payload off len
 
 -- Precondition: the length must be greater than zero.
