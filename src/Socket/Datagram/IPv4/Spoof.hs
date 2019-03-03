@@ -49,9 +49,10 @@ import System.Posix.Types (Fd)
 import Text.Printf (printf)
 
 import qualified Data.Primitive as PM
+import qualified Foreign.C.Error.Describe as D
+import qualified GHC.Exts as E
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
-import qualified GHC.Exts as E
 import qualified Socket as SCK
 
 -- TODO: Something I am not sure about is whether or not it is necessary
@@ -277,7 +278,7 @@ handleSocketException func e
       [describeErrorCode e]
 
 describeErrorCode :: Errno -> String
-describeErrorCode (Errno e) = "error code " ++ show e
+describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
 
 handleSendException :: String -> Errno -> IO (Either (SendException i) a)
 {-# INLINE handleSendException #-}

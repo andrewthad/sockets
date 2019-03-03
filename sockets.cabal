@@ -57,6 +57,7 @@ library
     , primitive >= 0.6.4
     , stm >= 2.4
     , text >= 1.2
+    , error-codes >= 0.1 && < 0.2
   hs-source-dirs: src
   if flag(debug)
     hs-source-dirs: src-debug

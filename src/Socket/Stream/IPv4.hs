@@ -83,6 +83,7 @@ import System.Posix.Types(Fd)
 
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
+import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified Socket as SCK
@@ -1064,7 +1065,7 @@ functionReceiveMutableByteArraySlice :: String
 functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
 
 describeErrorCode :: Errno -> String
-describeErrorCode (Errno e) = "error code " ++ show e
+describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
 
 handleReceiveException :: String -> Errno -> IO (Either (ReceiveException i) a)
 handleReceiveException func e
