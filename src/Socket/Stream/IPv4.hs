@@ -255,41 +255,6 @@ waitlessAccept lstn = do
           SCK.functionWithAccepted
           [SCK.cgetsockname,SCK.socketAddressSize]
 
--- This function factors out the common elements of withAccepted, forkAccepted,
--- and forkAcceptedUnmasked. Unfortunately, I can barely understand it. The
--- higher-rank callback is particularly impenetrable. Sorry.
-internalAccepted ::
-     ((forall x. IO x -> IO x) -> ((IO a -> IO d) -> IO (Either CloseException (),d)) -> IO (Either (AcceptException 'Uninterruptible) c))
-  -> Listener
-  -> (Connection -> Endpoint -> IO a)
-  -> IO (Either (AcceptException 'Uninterruptible) c)
-internalAccepted wrap (Listener !lst) f = do
-  threadWaitRead lst
-  mask $ \restore -> do
-    S.uninterruptibleAccept lst S.sizeofSocketAddressInternet >>= \case
-      Left err -> handleAcceptException "withAccepted" err
-      Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
-        then case S.decodeSocketAddressInternet sockAddr of
-          Just sockAddrInet -> do
-            let acceptedEndpoint = socketAddressInternetToEndpoint sockAddrInet
-            debug ("internalAccepted: successfully accepted connection from " ++ show acceptedEndpoint)
-            wrap restore $ \restore' -> do
-              a <- onException (restore' (f (Connection acpt) acceptedEndpoint)) (S.uninterruptibleClose acpt)
-              e <- gracefulCloseA acpt
-              pure (e,a)
-          Nothing -> do
-            _ <- S.uninterruptibleClose acpt
-            throwIO $ SocketUnrecoverableException
-              moduleSocketStreamIPv4
-              SCK.functionWithAccepted
-              [SCK.cgetsockname,SCK.nonInternetSocketFamily]
-        else do
-          _ <- S.uninterruptibleClose acpt
-          throwIO $ SocketUnrecoverableException
-            moduleSocketStreamIPv4
-            SCK.functionWithAccepted
-            [SCK.cgetsockname,SCK.socketAddressSize]
-
 gracefulCloseA :: Fd -> IO (Either CloseException ())
 gracefulCloseA fd = S.uninterruptibleShutdown fd S.write >>= \case
   -- On Linux (not sure about others), calling shutdown
@@ -399,13 +364,13 @@ forkAccepted ::
   -> (Connection -> Endpoint -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
-forkAccepted lst consumeException cb = internalAccepted
-  ( \restore action -> do
-    tid <- forkIO $ do
-      (e,x) <- action restore
-      restore (consumeException e x)
-    pure (Right tid)
-  ) lst cb
+forkAccepted lstn consumeException cb =
+  mask $ \restore -> accept lstn >>= \case
+    Left e -> pure (Left e)
+    Right (conn, endpoint) -> fmap Right $ forkIO $ do
+      a <- onException (restore (cb conn endpoint)) (disconnect_ conn)
+      e <- disconnect conn
+      restore (consumeException e a)
 
 -- | Accept a connection on the listener and run the supplied callback in
 -- a new thread. The masking state is set to @Unmasked@ when running the
