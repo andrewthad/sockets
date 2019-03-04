@@ -49,6 +49,7 @@ import Socket.IPv4 (Endpoint(..),describeEndpoint)
 import qualified Socket as SCK
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
+import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 
@@ -363,7 +364,7 @@ functionWithSocket :: String
 functionWithSocket = "withSocket"
 
 describeErrorCode :: Errno -> String
-describeErrorCode (Errno e) = "error code " ++ show e
+describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
 
 handleSendException :: String -> Errno -> IO (Either (SendException i) a)
 {-# INLINE handleSendException #-}
