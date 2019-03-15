@@ -25,6 +25,9 @@ module Socket.Stream.IPv4
   , sendByteArraySlice
   , sendMutableByteArray
   , sendMutableByteArraySlice
+  , sendAddr
+  , sendByteString
+  , sendLazyByteString
   , interruptibleSendByteArray
   , interruptibleSendByteArraySlice
   , interruptibleSendMutableByteArraySlice
@@ -64,15 +67,16 @@ import Control.Monad.STM (STM,atomically,retry)
 import Control.Concurrent.STM (TVar,modifyTVar',readTVar)
 import Data.Bifunctor (bimap,first)
 import Data.Bool (bool)
+import Data.ByteString (ByteString)
 import Data.Functor (($>))
-import Data.Primitive (ByteArray, MutableByteArray(..))
+import Data.Primitive (Addr(..), ByteArray, MutableByteArray(..))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, ePIPE, eNOTCONN)
 import Foreign.C.Error (eADDRINUSE,eCONNRESET)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Types (CInt, CSize)
-import GHC.Exts (Int(I#), RealWorld, shrinkMutableByteArray#)
+import GHC.Exts (Ptr(Ptr),Int(I#), RealWorld, shrinkMutableByteArray#)
 import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
 import Socket (SocketUnrecoverableException(..))
@@ -84,6 +88,8 @@ import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import System.Posix.Types(Fd)
 
 import qualified Control.Monad.Primitive as PM
+import qualified Data.ByteString.Unsafe as BU
+import qualified Data.ByteString.Lazy.Internal as LBS
 import qualified Data.Primitive as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
@@ -645,6 +651,45 @@ interruptibleSendByteArray ::
 interruptibleSendByteArray abandon conn arr =
   interruptibleSendByteArraySlice abandon conn arr 0 (PM.sizeofByteArray arr)
 
+-- | Send a 'ByteString' over a connection. 
+sendByteString ::
+     Connection -- ^ Connection
+  -> ByteString -- ^ Payload
+  -> IO (Either (SendException 'Uninterruptible) ())
+sendByteString !conn !payload = BU.unsafeUseAsCStringLen payload
+  (\(Ptr addr,len) -> sendAddr conn (Addr addr) len)
+
+-- | Send a lazy 'LBS.ByteString' over a connection. 
+sendLazyByteString ::
+     Connection -- ^ Connection
+  -> LBS.ByteString -- ^ Payload
+  -> IO (Either (SendException 'Uninterruptible) ())
+sendLazyByteString !conn !chunks0 = go chunks0 where
+  go LBS.Empty = pure (Right ())
+  go (LBS.Chunk chunk chunks) = sendByteString conn chunk >>= \case
+    Left e -> pure (Left e)
+    Right _ -> go chunks
+
+sendAddr ::
+     Connection -- ^ Connection
+  -> Addr -- ^ Payload start address
+  -> Int -- ^ Payload length 
+  -> IO (Either (SendException 'Uninterruptible) ())
+sendAddr !conn !payload0 !len0 = go payload0 len0
+  where
+  go !payload !len = if len > 0
+    then internalSendAddr conn payload len >>= \case
+      Left e -> pure (Left e)
+      Right sz' -> do
+        let sz = csizeToInt sz'
+        go (PM.plusAddr payload sz) (len - sz)
+    else if len == 0
+      then pure (Right ())
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionSendByteArray
+        [SCK.negativeSliceLength]
+
 sendByteArraySlice ::
      Connection -- ^ Connection
   -> ByteArray -- ^ Payload (will be sliced)
@@ -813,6 +858,16 @@ internalSend !conn !payload !off !len = veryInternalSend
   conn payload off len
 
 -- Precondition: the length must be greater than zero.
+internalSendAddr ::
+     Connection -- ^ Connection
+  -> Addr -- ^ Buffer start address
+  -> Int -- ^ Length of slice into buffer
+  -> IO (Either (SendException 'Uninterruptible) CSize)
+internalSendAddr !conn !payload !len = veryInternalSendAddr
+  (\fd -> threadWaitWrite fd *> pure (Right ()))
+  conn payload len
+
+-- Precondition: the length must be greater than zero.
 internalInterruptibleSend ::
      TVar Bool -- ^ Aliveness
   -> Connection -- ^ Connection
@@ -856,6 +911,38 @@ veryInternalSend wait (Connection !s) !payload !off !len = do
             case e2 of
               Left err2 -> do
                 debug "veryInternalSend: encountered error after sending chunk on stream socket"
+                handleSendException functionSendByteArray err2
+              Right sz -> pure (Right sz)
+      else handleSendException functionSendByteArray err1
+    Right sz -> pure (Right sz)
+
+-- Precondition: the length must be greater than zero.
+veryInternalSendAddr ::
+     (Fd -> IO (Either (SendException i) ()))
+  -> Connection -- ^ Connection
+  -> Addr -- ^ Buffer start address
+  -> Int -- ^ Length of payload
+  -> IO (Either (SendException i) CSize)
+{-# INLINE veryInternalSendAddr #-}
+veryInternalSendAddr wait (Connection !s) !payload !len = do
+  debug ("veryInternalSendAddr: about to send chunk on stream socket, length " ++ show len)
+  e1 <- S.uninterruptibleSend s payload
+    (intToCSize len)
+    (S.noSignal)
+  debug "veryInternalSendAddr: just sent chunk on stream socket"
+  case e1 of
+    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
+      then do
+        debug "veryInternalSendAddr: waiting to for write ready on stream socket"
+        wait s >>= \case
+          Left e -> pure (Left e)
+          Right _ -> do
+            e2 <- S.uninterruptibleSend s payload
+              (intToCSize len)
+              (S.noSignal)
+            case e2 of
+              Left err2 -> do
+                debug "veryInternalSendAddr: encountered error after sending chunk on stream socket"
                 handleSendException functionSendByteArray err2
               Right sz -> pure (Right sz)
       else handleSendException functionSendByteArray err1
