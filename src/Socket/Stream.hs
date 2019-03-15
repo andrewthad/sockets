@@ -60,7 +60,7 @@ data ConnectException :: Interruptibility -> Type where
   ConnectFileDescriptorLimit :: ConnectException i
   -- | The network is unreachable. (@ENETUNREACH@)
   ConnectNetworkUnreachable :: ConnectException i
-  -- | All port numbers numbers in the ephemeral port range are currently in
+  -- | All port numbers in the ephemeral port range are currently in
   --   use. (@EADDRNOTAVAIL@)
   ConnectEphemeralPortsExhausted :: ConnectException i
   -- | No one is listening on the remote address. (@ECONNREFUSED@)
