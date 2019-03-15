@@ -35,6 +35,7 @@ module Socket.Stream.IPv4
   , receiveBoundedByteArray
   , receiveBoundedMutableByteArraySlice
   , receiveMutableByteArray
+  , receiveByteString
   , interruptibleReceiveByteArray
   , interruptibleReceiveBoundedMutableByteArraySlice
     -- * Exceptions
@@ -63,9 +64,8 @@ import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
 import Control.Concurrent (threadWaitReadSTM,threadWaitWriteSTM)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Exception (mask, mask_, onException, throwIO)
-import Control.Monad.STM (STM,atomically,retry)
+import Control.Monad.STM (atomically,retry)
 import Control.Concurrent.STM (TVar,modifyTVar',readTVar)
-import Data.Bifunctor (bimap,first)
 import Data.Bool (bool)
 import Data.ByteString (ByteString)
 import Data.Functor (($>))
@@ -76,7 +76,7 @@ import Foreign.C.Error (eADDRINUSE,eCONNRESET)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Types (CInt, CSize)
-import GHC.Exts (Ptr(Ptr),Int(I#), RealWorld, shrinkMutableByteArray#)
+import GHC.Exts (Ptr(Ptr),Int(I#), RealWorld, shrinkMutableByteArray#, byteArrayContents#, unsafeCoerce#)
 import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
 import Socket (SocketUnrecoverableException(..))
@@ -88,6 +88,7 @@ import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import System.Posix.Types(Fd)
 
 import qualified Control.Monad.Primitive as PM
+import qualified Data.ByteString.Internal as BI
 import qualified Data.ByteString.Unsafe as BU
 import qualified Data.ByteString.Lazy.Internal as LBS
 import qualified Data.Primitive as PM
@@ -95,6 +96,7 @@ import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified Socket as SCK
+import qualified GHC.ForeignPtr as FP
 
 -- | A socket that listens for incomming connections.
 newtype Listener = Listener Fd
@@ -1035,6 +1037,17 @@ internalReceiveByteArray recvMax !conn0 !total = do
       moduleSocketStreamIPv4
       functionReceiveByteArray
       [SCK.negativeSliceLength]
+
+-- | Receive exactly the given number of bytes.
+receiveByteString :: 
+     Connection -- ^ Connection
+  -> Int -- ^ Number of bytes to receive
+  -> IO (Either (ReceiveException 'Uninterruptible) ByteString)
+receiveByteString !conn !total = do
+  marr@(MutableByteArray marr#) <- PM.newPinnedByteArray total
+  receiveMutableByteArray conn marr >>= \case
+    Left err -> pure (Left err)
+    Right _ -> pure (Right (BI.PS (FP.ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (FP.PlainPtr marr#)) 0 total))
 
 -- | Receive a number of bytes exactly equal to the size of the mutable
 --   byte array. If the remote application shuts down its end of the

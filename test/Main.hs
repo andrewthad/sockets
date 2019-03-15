@@ -11,6 +11,7 @@ import Control.Exception (Exception)
 import Control.Exception (throwIO)
 import Control.Monad.ST (runST)
 import Data.Bool (bool)
+import Data.ByteString (ByteString)
 import Data.Primitive (ByteArray)
 import Data.Word (Word16,Word8)
 import GHC.Exts (RealWorld)
@@ -19,6 +20,7 @@ import System.IO (stderr,hPutStrLn)
 import Test.Tasty
 import Test.Tasty.HUnit
 
+import qualified Data.ByteString as B
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.MVar as PM
 import qualified GHC.Exts as E
@@ -63,6 +65,7 @@ tests canSpoof = testGroup "socket"
         , testCase "4MB" (testStreamB 4)
         , testCase "32MB" (testStreamB 32)
         ]
+      , testCase "C" testStreamC
       ]
     ]
   ]
@@ -204,6 +207,24 @@ testStreamA = do
       let theSize = PM.indexByteArray serializedSize 0 :: Int
       result <- unhandled $ SI.receiveByteArray conn theSize
       pure result
+
+testStreamC :: Assertion
+testStreamC = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  received @=? message
+  where
+  message = B.pack (enumFromTo 0 (100 :: Word8)) :: ByteString
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = do
+    dstPort <- PM.takeMVar m
+    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+      unhandled $ SI.sendByteString conn message
+  receiver :: PM.MVar RealWorld Word16 -> IO ByteString
+  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+    PM.putMVar m port
+    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
+      unhandled $ SI.receiveByteString conn (B.length message)
 
 -- The sender sends a large amount of traffic that may exceed
 -- the size of the operating system's TCP send buffer. The 

@@ -137,7 +137,7 @@ act ::
 act !sock !buf@(MutablePrimArray buf#) !remotes !counter !done = forever $ do
   n <- scramble buf
   let remote = PM.indexPrimArray remotes (mod n participants)
-  unhandled $ DIU.sendMutableByteArray sock (Endpoint {port = remote, address = IPv4.loopback})
+  unhandled $ DIU.sendMutableByteArraySlice sock (Endpoint {port = remote, address = IPv4.loopback})
     (PM.MutableByteArray buf#) 0 (payloadSize * PM.sizeOf (undefined :: Int))
   recvSz <- unhandled $ DIU.receiveMutableByteArraySlice_ sock (PM.MutableByteArray buf#) 0
     (payloadSize * PM.sizeOf (undefined :: Int))
