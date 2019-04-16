@@ -72,6 +72,7 @@ library
     Socket.Datagram.IPv4.Spoof
     Socket.Stream.IPv4
   other-modules:
+    Socket.EventManager
     Socket.Stream
     Socket.Datagram
     Socket.Datagram.IPv4.Undestined.Multiple
@@ -86,6 +87,8 @@ library
     , ip >= 1.4.1
     , posix-api >= 0.2.1
     , primitive >= 0.6.4
+    , primitive-atomic
+    , primitive-unlifted
     , stm >= 2.4
     , text >= 1.2
   hs-source-dirs: src
