@@ -66,6 +66,7 @@ tests canSpoof = testGroup "socket"
         , testCase "32MB" (testStreamB 32)
         ]
       , testCase "C" testStreamC
+      , testCase "D" testStreamD
       ]
     ]
   ]
@@ -225,6 +226,47 @@ testStreamC = do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       unhandled $ SI.receiveByteString conn (B.length message)
+
+-- This is intended to test creating sockets after other sockets have been
+-- closed.
+testStreamD :: Assertion
+testStreamD = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),()) <- concurrently (server m) (client m)
+  pure ()
+  where
+  message = E.fromList (replicate 50 (0 :: Word8)) :: ByteArray
+  totalConns = 20
+  simultaneousClients = 5
+  client :: PM.MVar RealWorld Word16 -> IO ()
+  client m = do
+    dstPort <- PM.takeMVar m
+    counter <- PM.newEmptyMVar
+    replicateM_ simultaneousClients $ do
+      _ <- unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+        let go = SI.sendByteArray conn message >>= \case
+              Left SI.SendShutdown -> pure ()
+              Left e -> throwIO e
+              Right () -> go
+        go
+      PM.putMVar counter ()
+    replicateM_ simultaneousClients $ PM.takeMVar counter
+  server :: PM.MVar RealWorld Word16 -> IO ()
+  server m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+    PM.putMVar m port
+    counter <- PM.newEmptyMVar
+    replicateM_ totalConns $ do
+      SI.forkAcceptedUnmasked listener
+        (\e () -> case e of
+          Left SI.ClosePeerContinuedSending -> PM.putMVar counter ()
+          Right () -> fail "testStreamD: unexpected behavior"
+        )
+        (\conn _ -> do
+          _ <- unhandled $ SI.receiveByteArray conn 1
+          pure ()
+        )
+    replicateM_ totalConns $ PM.takeMVar counter
+
 
 -- The sender sends a large amount of traffic that may exceed
 -- the size of the operating system's TCP send buffer. The 
