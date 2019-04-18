@@ -5,6 +5,7 @@
 {-# language ScopedTypeVariables #-}
 {-# language TypeFamilies #-}
 
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (concurrently)
 import Control.Monad (replicateM_)
 import Control.Exception (Exception)
@@ -235,20 +236,22 @@ testStreamD = do
   ((),()) <- concurrently (server m) (client m)
   pure ()
   where
-  message = E.fromList (replicate 50 (0 :: Word8)) :: ByteArray
+  message = E.fromList (replicate 50000 (0 :: Word8)) :: ByteArray
   totalConns = 20
   simultaneousClients = 5
   client :: PM.MVar RealWorld Word16 -> IO ()
   client m = do
     dstPort <- PM.takeMVar m
     counter <- PM.newEmptyMVar
-    replicateM_ simultaneousClients $ do
-      _ <- unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-        let go = SI.sendByteArray conn message >>= \case
-              Left SI.SendShutdown -> pure ()
-              Left e -> throwIO e
-              Right () -> go
-        go
+    replicateM_ simultaneousClients $ forkIO $ do
+      replicateM_ (div totalConns simultaneousClients) $ do
+        _ <- unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+          let go = SI.sendByteArray conn message >>= \case
+                Left SI.SendShutdown -> pure ()
+                Left e -> throwIO e
+                Right () -> go
+          go
+        pure ()
       PM.putMVar counter ()
     replicateM_ simultaneousClients $ PM.takeMVar counter
   server :: PM.MVar RealWorld Word16 -> IO ()
