@@ -393,13 +393,17 @@ handleEvents !evs !len !sz !vars = do
   traverseMutablePrimArray_
     ( \(Epoll.Event{Epoll.events,Epoll.payload}) -> do
       let fd = payload
-      let hasRead = Epoll.containsEvents events Epoll.input
-      let hasReadHangup = Epoll.containsEvents events Epoll.readHangup
-      let hasWrite = Epoll.containsEvents events Epoll.output
-      let hasHangup = Epoll.containsEvents events Epoll.hangup
-      let hasError = Epoll.containsEvents events Epoll.error
+      let hasReadInclusive = Epoll.containsAnyEvents events
+            (Epoll.input <> Epoll.readHangup <> Epoll.error <> Epoll.hangup)
+      let hasWriteInclusive = Epoll.containsAnyEvents events
+            (Epoll.output <> Epoll.error <> Epoll.hangup)
+      let hasRead = Epoll.containsAnyEvents events Epoll.input
+      let hasReadHangup = Epoll.containsAnyEvents events Epoll.readHangup
+      let hasWrite = Epoll.containsAnyEvents events Epoll.output
+      let hasHangup = Epoll.containsAnyEvents events Epoll.hangup
+      let hasError = Epoll.containsAnyEvents events Epoll.error
       whenDebugging $ do
-        let hasPriority = Epoll.containsEvents events Epoll.priority
+        let hasPriority = Epoll.containsAnyEvents events Epoll.priority
         let Epoll.Events e = events
         debug $
           "handleEvents: fd " ++ show fd  ++
@@ -409,11 +413,8 @@ handleEvents !evs !len !sz !vars = do
           "] error [" ++ show hasError ++
           "] priority [" ++ show hasPriority ++ "]"
       (readVar,writeVar) <- lookupBoth (fdToInt fd) vars
-      when (hasRead || hasReadHangup) $ atomically $ STM.modifyTVar' readVar readyToken
-      when hasWrite $ atomically $ STM.modifyTVar' writeVar readyToken
-      -- when (hasError) $ atomically $ do
-      --   STM.modifyTVar' writeVar woundToken
-      --   STM.modifyTVar' readVar woundToken
+      when hasReadInclusive $ atomically $ STM.modifyTVar' readVar readyToken
+      when hasWriteInclusive $ atomically $ STM.modifyTVar' writeVar readyToken
     ) evs 0 len
   if | len < sz -> pure (evs,sz)
      | len == sz -> do
@@ -507,9 +508,6 @@ newtype Token = Token Word64
 readyBit :: Word64
 readyBit = 0x8000000000000000
 
-woundBit :: Word64
-woundBit = 0x4000000000000000
-
 unreadyBit :: Word64
 unreadyBit = 0x7FFFFFFFFFFFFFFF
 
@@ -527,16 +525,8 @@ interruptToken = Token 0
 isTokenReady :: Token -> Bool
 isTokenReady (Token w) = testBit w 63
 
-isTokenFatal :: Token -> Bool
-isTokenFatal (Token w) = testBit w 62
-
 isInterrupt :: Token -> Bool
 isInterrupt (Token w) = w == 0
-
--- Indicates that an error has arrived. These are never
--- recoverable.
-woundToken :: Token -> Token
-woundToken (Token w) = Token (woundBit .|. (w + 1))
 
 -- Increments the event counter. Sets readiness to true. Leaves
 -- the descriptor counter alone.
@@ -584,14 +574,10 @@ wait !tv = do
   debug $ "wait: initial token value " ++ (lpad 64 (showIntAtBase 2 binChar val ""))
   if isTokenReady token0
     then pure token0
-    else do
-      token1 <- atomically $ do
-        token1 <- STM.readTVar tv
-        STM.check (isTokenReady token1)
-        pure token1
-      if isTokenFatal token1
-        then die "Socket.EventManager.wait: nonrecoverable EPOLLERR"
-        else pure token1
+    else atomically $ do
+      token1 <- STM.readTVar tv
+      STM.check (isTokenReady token1)
+      pure token1
 
 interruptibleWait ::
      TVar Bool -- ^ Interrupt
