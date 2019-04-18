@@ -3,14 +3,27 @@
 {-# language DerivingStrategies #-}
 {-# language GeneralizedNewtypeDeriving #-}
 {-# language LambdaCase #-}
+{-# language MagicHash #-}
+{-# language MultiWayIf #-}
 {-# language NamedFieldPuns #-}
 {-# language ScopedTypeVariables #-}
+{-# language UnboxedTuples #-}
 
 module Socket.EventManager
-  ( manager
+  ( -- * Manager
+    manager
+    -- * Registration
   , register
   , reader
-  , deregister
+  , writer
+    -- * Transactional Variables
+  , Token
+  , unready
+  , wait
+  , unreadyAndWait
+  , interruptibleWait
+  , interruptibleWaitCounting
+  , isInterrupt
   ) where
 
 -- Why write another event manager? GHC ships with the mio event manager,
@@ -73,31 +86,43 @@ module Socket.EventManager
 -- >         then fail "Not possible"
 -- >         else ...
 
-import Control.Applicative (liftA2)
-import Control.Monad.STM (atomically)
-import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray,ByteArray)
-import Data.Primitive (PrimUnlifted,Prim)
-import Data.Primitive.Unlifted.TVar (UnliftedTVar)
-import Data.Word (Word64)
-import Foreign.C.Error (Errno(..))
-import GHC.Exts (RealWorld)
-import System.Posix.Types (Fd)
-import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.))
-import System.IO.Unsafe (unsafePerformIO)
-import Control.Monad.ST (runST)
-import Control.Monad (when)
+import Control.Applicative (liftA2,(<|>))
 import Control.Concurrent (getNumCapabilities,forkOn,rtsSupportsBoundThreads)
-import GHC.Conc.Sync (yield)
+import Control.Concurrent.STM (TVar)
+import Control.Monad (when)
+import Control.Monad.STM (atomically)
+import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
+import Data.Bits (testBit)
+import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
+import Data.Primitive (Prim)
+import Data.Word (Word64,Word32)
+import Foreign.C.Error (Errno(..))
 import Foreign.C.Types (CInt)
+import GHC.Conc.Sync (yield)
+import GHC.Exts (RealWorld,Int(I#),(*#))
+import Numeric (showIntAtBase)
+import Socket.Error (die)
+import Socket.Debug (debug,whenDebugging)
+import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.Types (Fd)
 
+import qualified Control.Monad.STM as STM
+import qualified Control.Concurrent.STM as STM
 import qualified Linux.Epoll as Epoll
+import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.Unlifted.Atomic as PM
-import qualified Data.Primitive.Unlifted.TVar as PM
+import qualified GHC.Exts as Exts
 
 -- | Register interest in reads and writes. After registering a socket,
 -- use 'reader' and 'writer' to get access to the transactional variables
--- that describe the readiness of their corresponding channels.
+-- that describe the readiness of their corresponding channels. When
+-- possible, register a file descriptor before doing whatever thing
+-- may cause it to become ready. This is currently not important for
+-- correctness (since the read and write channel optimistically start
+-- out as ready). However, future optimizations may introduce
+-- registration functions that let users specify if the channels
+-- should start as ready or not ready.
 --
 -- Precondition: There is no existing registration for this file descriptor.
 register ::
@@ -105,19 +130,32 @@ register ::
   -> Fd -- File descriptor
   -> IO ()
 register mngr@Manager{epoll} !fd = do
-  constructivelyLookupTier1 (fdToInt fd) mngr
+  (ixTier2, tier2) <- constructivelyLookupTier1 (fdToInt fd) mngr
+  let ixRead = ixTier2 * 2
+      ixWrite = ixRead + 1
+  readVar <- PM.readUnliftedArray tier2 ixRead
+  writeVar <- PM.readUnliftedArray tier2 ixWrite
+  -- It should not be necessary to batch these in the same atomically
+  -- since this function should only ever be called with exceptions
+  -- masked. However, we do it anyway since it might improve performance.
+  -- It's difficult to test this theory.
+  atomically $ do
+    STM.modifyTVar' readVar readyToken
+    STM.modifyTVar' writeVar readyToken
   -- Enough space for a single registration.
   ev <- PM.newPrimArray 1
+  debug ("register: registering fd " ++ show fd)
   PM.writePrimArray ev 0 $ Epoll.Event
-    { Epoll.events = Epoll.input <> Epoll.output <> Epoll.edgeTriggered
+    { Epoll.events = Epoll.input <> Epoll.output <> Epoll.edgeTriggered <> Epoll.readHangup
     , Epoll.payload = fd
     }
   e <- Epoll.uninterruptibleControlMutablePrimArray epoll Epoll.add fd ev
   case e of
     Left (Errno code) ->
-      fail $ "Socket.EventManager.register: epoll_ctl error " ++ show code
+      die $ "Socket.EventManager.register: epoll_ctl error " ++ show code
     Right () -> pure ()
 
+-- HAHA: deregister has been eliminated.
 -- This does not close the file descriptor. Call this function either
 -- right before or right after closing the socket. It does not matter
 -- which order they happen in. Be sure to mask exceptions when closing
@@ -125,16 +163,9 @@ register mngr@Manager{epoll} !fd = do
 -- doesn't cause closing or deregistration to happen without the other
 -- happening as well. Notice that this function does not call epoll_ctl.
 -- Closing the file descriptor will cause epoll deregistration to happen.
-deregister :: Manager -> Fd -> IO ()
-deregister Manager{variables} !fd = do
-  (readVar,writeVar) <- lookupBoth (fdToInt fd) variables
-  -- It should not be necessary to batch these in the same atomically
-  -- since this function should only ever be called with exceptions
-  -- masked. However, we do it anyway since it might improve performance.
-  -- It's difficult to test this theory.
-  atomically $ do
-    PM.modifyUnliftedTVar readVar incrementEventCounter
-    PM.modifyUnliftedTVar writeVar incrementEventCounter
+-- deregister :: Manager -> Fd -> IO ()
+-- deregister Manager{variables} !fd = do
+--   (readVar,writeVar) <- lookupBoth (fdToInt fd) variables
 
 -- Deregister insterest in reads and writes.
 -- Precondition: A previous call to register has been made.
@@ -143,8 +174,8 @@ deregister Manager{variables} !fd = do
 type MUArray = MutableUnliftedArray RealWorld
 
 data Manager = Manager
-  { variables :: !(MUArray (MUArray (UnliftedTVar Token)))
-  , novars :: !(MUArray (UnliftedTVar Token))
+  { variables :: !(MUArray (MUArray (TVar Token)))
+  , novars :: !(MUArray (TVar Token))
     -- An empty mutable array. This array is used to mark the absense of
     -- a tier-two array of TVars.
   , epoll :: !Fd
@@ -155,12 +186,12 @@ manager :: Manager
 manager = unsafePerformIO $ do
   when (not rtsSupportsBoundThreads) $ do
     fail $ "Socket.Event.manager: threaded runtime required"
-  novars <- PM.unsafeNewUnliftedArray 0
-  variables <- PM.newUnliftedArray 32 novars
-  Epoll.uninterruptibleCreate 1 >>= \case
+  !novars <- PM.unsafeNewUnliftedArray 0
+  !variables <- PM.newUnliftedArray 32 novars
+  Epoll.uninterruptibleCreate1 Epoll.closeOnExec >>= \case
     Left (Errno code) ->
-      fail $ "Socket.EventManager.manager: epoll_create error code " ++ show code
-    Right epoll -> do
+      die $ "Socket.EventManager.manager: epoll_create error code " ++ show code
+    Right !epoll -> do
       -- Spawn a worker thread (for calling epoll_wait in the background)
       -- on each capability. Recall that since this is in a 
       -- noinline+unsafePerformIO setting, this only happens the
@@ -168,24 +199,35 @@ manager = unsafePerformIO $ do
       -- continue to run forever. Nothing should be able to kill them
       -- since the thread IDs are discarded.
       capNum <- getNumCapabilities
+      -- There should basically never be a non-positive number of
+      -- capabilities, so we reserve this check for debugging
+      -- situations.
+      whenDebugging $ do
+        when (capNum < 1) $ do
+          die $ "Socket.EventManager.manager: non-positive number of capabilities"
       let go !ix = if ix > (-1)
             then do
               _ <- forkOn ix $ do
-                let initSz = 1
-                initArr <- PM.newPrimArray initSz
+                let !initSz = 1
+                !initArr <- newPinnedPrimArray initSz
                 loopManager initArr initSz epoll variables
               go (ix - 1)
             else pure ()
-      go (capNum - 1)
+      -- TODO: A single worker thread for now.
+      go 0
+      -- go (capNum - 1)
       pure (Manager {variables,novars,epoll})
 
-reader :: Manager -> Fd -> IO (UnliftedTVar Token)
+reader :: Manager -> Fd -> IO (TVar Token)
 reader Manager{variables} !fd = lookupGeneric 0 (fdToInt fd) variables
+
+writer :: Manager -> Fd -> IO (TVar Token)
+writer Manager{variables} !fd = lookupGeneric 1 (fdToInt fd) variables
 
 lookupBoth ::
      Int -- File descriptor
-  -> MUArray (MUArray (UnliftedTVar Token))
-  -> IO (UnliftedTVar Token,UnliftedTVar Token)
+  -> MUArray (MUArray (TVar Token))
+  -> IO (TVar Token,TVar Token)
 lookupBoth !fd !arr = do
   let (ixTier1,ixTier2) = decompose fd
   tier2 <- PM.readUnliftedArray arr ixTier1
@@ -198,8 +240,9 @@ lookupBoth !fd !arr = do
 lookupGeneric ::
      Int -- Read: 0, Write: 1
   -> Int -- File descriptor
-  -> MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld (UnliftedTVar Token))
-  -> IO (UnliftedTVar Token)
+  -> MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld (TVar Token))
+  -> IO (TVar Token)
+{-# inline lookupGeneric #-}
 lookupGeneric !rw !fd !arr = do
   let (ixTier1,ixTier2) = decompose fd
   tier2 <- PM.readUnliftedArray arr ixTier1
@@ -208,9 +251,9 @@ lookupGeneric !rw !fd !arr = do
 constructivelyLookupTier1 ::
      Int -- File descriptor
   -> Manager
-  -> IO ()
+  -> IO (Int, MUArray (TVar Token))
 constructivelyLookupTier1 !fd Manager{variables,novars} = do
-  let (ixTier1,_) = decompose fd
+  let (ixTier1,ixTier2) = decompose fd
   varsTier2 <- PM.readUnliftedArray variables ixTier1
   if PM.sameMutableUnliftedArray varsTier2 novars
     then do
@@ -221,49 +264,111 @@ constructivelyLookupTier1 !fd Manager{variables,novars} = do
       let goVars !ix = if ix > (-1)
             then do
               PM.writeUnliftedArray varsAttempt ix
-                =<< PM.newUnliftedTVarIO emptyToken
+                =<< STM.newTVarIO emptyToken
               goVars (ix - 1)
             else pure ()
       goVars (len - 1)
-      -- We ignore the result of casUnliftedArray. It does not actually
+      -- We ignore the success of casUnliftedArray. It does not actually
       -- matter whether or not it succeeded. If it failed, some other
       -- thread must have initialized the tier 2 arrays.
-      _ <- PM.casUnliftedArray variables ixTier1 novars varsAttempt
-      pure ()
-    else pure ()
+      (success,tier2) <- PM.casUnliftedArray variables ixTier1 novars varsAttempt
+      debug ("constructivelyLookupTier1: Created tier 2 array of length " ++ show len ++ " at index " ++ show ixTier1 ++ " with success " ++ show success)
+      pure (ixTier2,tier2)
+    else pure (ixTier2,varsTier2)
 
 loopManager :: 
      MutablePrimArray RealWorld (Epoll.Event 'Epoll.Response Fd)
   -> Int -- size of events buffer
   -> Fd -- epoll file descriptor
-  -> MUArray (MUArray (UnliftedTVar Token)) -- tier 1 variables array
+  -> MUArray (MUArray (TVar Token)) -- tier 1 variables array
   -> IO ()
 loopManager !evs0 !sz0 !epfd !tier1 = do
-  (evs1, sz1) <- stepManager evs0 sz0 epfd tier1
+  yield
+  (!evs1, !sz1) <- stepManager evs0 sz0 epfd tier1
   loopManager evs1 sz1 epfd tier1
 
 stepManager ::
      MutablePrimArray RealWorld (Epoll.Event 'Epoll.Response Fd)
   -> Int -- size of events buffer
   -> Fd -- epoll file descriptor
-  -> MUArray (MUArray (UnliftedTVar Token)) -- tier 1 variables array
+  -> MUArray (MUArray (TVar Token)) -- tier 1 variables array
   -> IO (MutablePrimArray RealWorld (Epoll.Event 'Epoll.Response Fd),Int)
      -- returns new events buffer and its size
 stepManager !evs0 !sz0 !epfd !tier1 = do
   Epoll.uninterruptibleWaitMutablePrimArray epfd evs0 (intToCInt sz0) >>= \case
-    Left (Errno code) -> fail $ "Socket.EventManager.stepManager: A " ++ show code
+    Left (Errno code) -> die $ "Socket.EventManager.stepManager: A " ++ show code
     Right len0 -> if len0 > 0
-      then handleEvents evs0 (cintToInt len0) sz0 tier1
+      then do
+        debug "stepManager: first attempt succeeded"
+        handleEvents evs0 (cintToInt len0) sz0 tier1
       else do
+        debug "stepManager: first attempt returned no events"
         yield
         Epoll.uninterruptibleWaitMutablePrimArray epfd evs0 (intToCInt sz0) >>= \case
-          Left (Errno code) -> fail $ "Socket.EventManager.stepManager: B " ++ show code
+          Left (Errno code) -> die $ "Socket.EventManager.stepManager: B " ++ show code
           Right len1 -> if len1 > 0
-            then handleEvents evs0 (cintToInt len1) sz0 tier1
+            then do
+              debug "stepManager: second attempt succeeded"
+              handleEvents evs0 (cintToInt len1) sz0 tier1
             else do
+              debug "stepManager: second attempt returned no events"
+              whenDebugging $ do
+                actualSize <- PM.getSizeofMutablePrimArray evs0
+                when (actualSize /= sz0) (die "stepManager: bad size")
+                -- let !(MutablePrimArray evs0#) = evs0
+                -- let untypedEvs0 = MutableByteArray evs0#
+                -- let byteSz = actualSize * 12
+                -- PM.fillByteArray untypedEvs0 0 byteSz 0xFF
+                -- This is expected to be garbage.
+                -- Epoll.Event{Epoll.events,Epoll.payload} <- PM.readPrimArray evs0 0
+                -- let fd = payload :: Fd
+                -- let Epoll.Events e = events
+                -- let bitmask = showIntAtBase 2 binChar e ""
+                -- (w0 :: Word32) <- PM.readByteArray untypedEvs0 0
+                -- (w1 :: Word32) <- PM.readByteArray untypedEvs0 1
+                -- (w2 :: Word32) <- PM.readByteArray untypedEvs0 2
+                -- debug $ "stepManager: element 0 raw before third attempt " ++ 
+                --   lpad 32 (showIntAtBase 2 binChar w0 "") ++ " " ++
+                --   lpad 32 (showIntAtBase 2 binChar w1 "") ++ " " ++
+                --   lpad 32 (showIntAtBase 2 binChar w2 "")
+                -- debug $ "stepManager: element 0 before third attempt " ++ show fd ++ " " ++ bitmask
+                -- when (sz0 > 1) $ do
+                --   (w0a :: Word32) <- PM.readByteArray untypedEvs0 3
+                --   (w1a :: Word32) <- PM.readByteArray untypedEvs0 4
+                --   (w2a :: Word32) <- PM.readByteArray untypedEvs0 5
+                --   debug $ "stepManager: element 1 raw before third attempt " ++ 
+                --     lpad 32 (showIntAtBase 2 binChar w0a "") ++ " " ++
+                --     lpad 32 (showIntAtBase 2 binChar w1a "") ++ " " ++
+                --     lpad 32 (showIntAtBase 2 binChar w2a "")
               Epoll.waitMutablePrimArray epfd evs0 (intToCInt sz0) (-1) >>= \case
-                Left (Errno code) -> fail $ "Socket.EventManager.stepManager: C " ++ show code
-                Right len2 -> handleEvents evs0 (cintToInt len2) sz0 tier1
+                Left (Errno code) -> die $ "Socket.EventManager.stepManager: C " ++ show code
+                Right len2 -> if len2 > 0
+                  then do
+                    whenDebugging $ do
+                      let !(MutablePrimArray evs0#) = evs0
+                      let untypedEvs0 = MutableByteArray evs0#
+                      debug ("stepManager: third attempt succeeded, len=" ++ show len2 ++ ",sz=" ++ show sz0)
+                      (w0 :: Word32) <- PM.readByteArray untypedEvs0 0
+                      (w1 :: Word32) <- PM.readByteArray untypedEvs0 1
+                      (w2 :: Word32) <- PM.readByteArray untypedEvs0 2
+                      debug $ "stepManager: element 0 raw after third attempt " ++ 
+                        lpad 32 (showIntAtBase 2 binChar w0 "") ++ " " ++
+                        lpad 32 (showIntAtBase 2 binChar w1 "") ++ " " ++
+                        lpad 32 (showIntAtBase 2 binChar w2 "")
+                      when (sz0 > 1) $ do
+                        (w0a :: Word32) <- PM.readByteArray untypedEvs0 3
+                        (w1a :: Word32) <- PM.readByteArray untypedEvs0 4
+                        (w2a :: Word32) <- PM.readByteArray untypedEvs0 5
+                        debug $ "stepManager: element 1 raw after third attempt " ++ 
+                          lpad 32 (showIntAtBase 2 binChar w0a "") ++ " " ++
+                          lpad 32 (showIntAtBase 2 binChar w1a "") ++ " " ++
+                          lpad 32 (showIntAtBase 2 binChar w2a "")
+                    handleEvents evs0 (cintToInt len2) sz0 tier1
+                  else die $ "Socket.EventManager.stepManager: D"
+
+lpad :: Int -> String -> String
+lpad m xs = replicate (m - length ys) '0' ++ ys
+  where ys = take m xs
 
 intToCInt :: Int -> CInt
 intToCInt = fromIntegral
@@ -281,37 +386,63 @@ handleEvents ::
      MutablePrimArray RealWorld (Epoll.Event 'Epoll.Response Fd)
   -> Int -- number of events
   -> Int -- size of events buffer, always greater than or equal to number of events
-  -> MUArray (MUArray (UnliftedTVar Token)) -- tier 1 variables array
+  -> MUArray (MUArray (TVar Token)) -- tier 1 variables array
   -> IO (MutablePrimArray RealWorld (Epoll.Event 'Epoll.Response Fd),Int)
      -- returns new events buffer and its size
 handleEvents !evs !len !sz !vars = do
   traverseMutablePrimArray_
     ( \(Epoll.Event{Epoll.events,Epoll.payload}) -> do
       let fd = payload
+      let hasRead = Epoll.containsEvents events Epoll.input
+      let hasReadHangup = Epoll.containsEvents events Epoll.readHangup
+      let hasWrite = Epoll.containsEvents events Epoll.output
+      let hasHangup = Epoll.containsEvents events Epoll.hangup
+      let hasError = Epoll.containsEvents events Epoll.error
+      whenDebugging $ do
+        let hasPriority = Epoll.containsEvents events Epoll.priority
+        let Epoll.Events e = events
+        debug $
+          "handleEvents: fd " ++ show fd  ++
+          " bitmask " ++ showIntAtBase 2 binChar e "" ++ " read [" ++ show hasRead ++
+          "] write [" ++ show hasWrite ++ "] hangup [" ++ show hasHangup ++
+          "] readHangup [" ++ show hasReadHangup ++
+          "] error [" ++ show hasError ++
+          "] priority [" ++ show hasPriority ++ "]"
       (readVar,writeVar) <- lookupBoth (fdToInt fd) vars
-      when (Epoll.containsEvents events Epoll.input) $ do
-        atomically $ PM.modifyUnliftedTVar readVar incrementEventCounter
-      when (Epoll.containsEvents events Epoll.output) $ do
-        atomically $ PM.modifyUnliftedTVar writeVar incrementEventCounter
+      when (hasRead || hasReadHangup) $ atomically $ STM.modifyTVar' readVar readyToken
+      when hasWrite $ atomically $ STM.modifyTVar' writeVar readyToken
+      -- when (hasError) $ atomically $ do
+      --   STM.modifyTVar' writeVar woundToken
+      --   STM.modifyTVar' readVar woundToken
     ) evs 0 len
-  if sz == len 
-    then do
-      let newSz = len * 2
-      newBuf <- PM.resizeMutablePrimArray evs newSz
-      pure (newBuf,newSz)
-    else pure (evs,sz)
+  if | len < sz -> pure (evs,sz)
+     | len == sz -> do
+        let newSz = sz * 2
+        debug ("handleEvents: doubling size of array to " ++ show newSz)
+        newBuf <- newPinnedPrimArray newSz
+        pure (newBuf,newSz)
+     | otherwise -> die "Socket.EventManager.handleEvents: len > sz"
+
+binChar :: Int -> Char
+binChar = \case
+  0 -> '0'
+  1 -> '1'
+  _ -> 'x'
 
 traverseMutablePrimArray_ ::
      Prim a
-  => (a -> IO b)
+  => (a -> IO ())
   -> MutablePrimArray RealWorld a
   -> Int -- offset
   -> Int -- end
   -> IO ()
 {-# inline traverseMutablePrimArray_ #-}
-traverseMutablePrimArray_ f a off len = go off where
-  go !ix = if ix < len
-    then (f =<< PM.readPrimArray a ix) *> go (ix + 1)
+traverseMutablePrimArray_ f a off end = go off where
+  go !ix = if ix < end
+    then do
+      debug ("traverseMutablePrimArray_: index " ++ show ix)
+      f =<< PM.readPrimArray a ix
+      go (ix + 1)
     else pure ()
 
 -- Given an argument N, return 2^N.
@@ -331,13 +462,21 @@ exp2succ n = unsafeShiftL (1 :: Int) (n + 1)
 -- 
 -- This gives the following decompositions:
 --
--- * 0 => (0,0)
--- * 1 => (1,0)
--- * 2 => (1,1)
--- * 3 => (2,0)
--- * 4 => (2,1)
--- * 5 => (2,2)
--- * 6 => (2,3)
+-- *  0 => (0,0)
+-- *  1 => (1,0)
+-- *  2 => (1,1)
+-- *  3 => (2,0)
+-- *  4 => (2,1)
+-- *  5 => (2,2)
+-- *  6 => (2,3)
+-- *  7 => (3,0)
+-- *  8 => (3,1)
+-- *  9 => (3,2)
+-- * 10 => (3,3)
+-- * 11 => (3,4)
+-- * 12 => (3,5)
+-- * 13 => (3,6)
+-- * 14 => (3,7)
 --
 -- Precondition: N >= 0.
 decompose :: Int -> (Int,Int)
@@ -363,27 +502,141 @@ fdToInt = fromIntegral
 -- Since a 63-bit word has so many inhabitants, we pretend that it will
 -- never wrap around. In practice, an application would need to run for
 -- trillions of years for overflow to happen.
-newtype Token = Token ByteArray
-  deriving newtype PrimUnlifted
+newtype Token = Token Word64
 
 readyBit :: Word64
 readyBit = 0x8000000000000000
 
--- The empty token has readiness set to true.
+woundBit :: Word64
+woundBit = 0x4000000000000000
+
+unreadyBit :: Word64
+unreadyBit = 0x7FFFFFFFFFFFFFFF
+
+eqToken :: Token -> Token -> Bool
+eqToken (Token a) (Token b) = a == b
+
+-- The empty token has readiness set to true. We start at event
+-- counter 1 since 0 is reserved as the interrupt.
 emptyToken :: Token
-emptyToken = Token $ runST $ do
-  arr <- PM.newByteArray 8
-  PM.writeByteArray arr 0 readyBit
-  PM.unsafeFreezeByteArray arr
+emptyToken = Token (readyBit .|. 1)
+
+interruptToken :: Token
+interruptToken = Token 0
+
+isTokenReady :: Token -> Bool
+isTokenReady (Token w) = testBit w 63
+
+isTokenFatal :: Token -> Bool
+isTokenFatal (Token w) = testBit w 62
+
+isInterrupt :: Token -> Bool
+isInterrupt (Token w) = w == 0
+
+-- Indicates that an error has arrived. These are never
+-- recoverable.
+woundToken :: Token -> Token
+woundToken (Token w) = Token (woundBit .|. (w + 1))
 
 -- Increments the event counter. Sets readiness to true. Leaves
 -- the descriptor counter alone.
-incrementEventCounter :: Token -> Token
-incrementEventCounter (Token arr) = Token $ runST $ do
-  let (w :: Word64) = PM.indexByteArray arr 0
-  marr <- PM.newByteArray 8
-  PM.writeByteArray marr 0 (readyBit .|. (w + 1))
-  PM.unsafeFreezeByteArray marr
+readyToken :: Token -> Token
+readyToken (Token w) = Token (readyBit .|. (w + 1))
+
+-- | Sets the readiness to false. Increments the event counter.
+unreadyToken :: Token -> Token
+unreadyToken (Token w) = Token (unreadyBit .&. (w + 1))
+
+-- | Why does 'unready' need the previous token value. At first glance,
+-- it seems that it would suffice to simply set something to false
+-- and be done with it. However, this runs into a subtle race condition.
+-- What if an @epoll_wait@ worker thread discovered that the file
+-- descriptor was ready for reads right before 'unready' was called?
+-- We take the old token value so that we can check to see if anything 
+-- has changed since we last checked in. If that's the case, this
+-- function aborts, leaving whatever the most recent call to
+-- @epoll_wait@ had done in tact.
+unready ::
+     Token -- ^ Token provided by previous call to wait
+  -> TVar Token -- ^ Transactional variable for readiness
+  -> IO ()
+unready !oldToken !tv = atomically $ do
+  newToken <- STM.readTVar tv
+  if eqToken oldToken newToken
+    then STM.writeTVar tv $! unreadyToken oldToken
+    else pure ()
+
+unreadyAndWait ::
+     Token -- ^ Token provided by previous call to wait
+  -> TVar Token -- ^ Transactional variable for readiness
+  -> IO Token -- ^ New token
+unreadyAndWait !oldToken !tv = do
+  unready oldToken tv
+  wait tv
+
+-- | Wait until the token indicates readiness. Keep in mind that
+-- false positives are possible. When a false positive happens,
+-- use 'unready' and then 'wait' again. Keep doing this until
+-- the file descriptor is actually ready for reads/writes.
+wait :: TVar Token -> IO Token
+wait !tv = do
+  !token0@(Token val) <- STM.readTVarIO tv
+  debug $ "wait: initial token value " ++ (lpad 64 (showIntAtBase 2 binChar val ""))
+  if isTokenReady token0
+    then pure token0
+    else do
+      token1 <- atomically $ do
+        token1 <- STM.readTVar tv
+        STM.check (isTokenReady token1)
+        pure token1
+      if isTokenFatal token1
+        then die "Socket.EventManager.wait: nonrecoverable EPOLLERR"
+        else pure token1
+
+interruptibleWait ::
+     TVar Bool -- ^ Interrupt
+  -> TVar Token
+  -> IO Token
+interruptibleWait !interrupt !tv = do
+  -- We make an effort to avoid a transaction if possible,
+  -- calling readTVarIO on both variables.
+  STM.readTVarIO interrupt >>= \case
+    True -> pure interruptToken
+    False -> do
+      token0 <- STM.readTVarIO tv
+      if isTokenReady token0
+        then pure token0
+        else do
+          atomically $
+            ( do STM.check =<< STM.readTVar interrupt
+                 pure interruptToken
+            ) <|>
+            ( do token1 <- STM.readTVar tv
+                 STM.check (isTokenReady token1)
+                 pure token1
+            )
+
+interruptibleWaitCounting :: TVar Int -> TVar Bool -> TVar Token -> IO Token
+interruptibleWaitCounting !counter !interrupt !tv = atomically $
+  -- We cannot go to the same lengths to avoid a transaction as
+  -- we do in interruptibleWait. Notablely, the token check and
+  -- an the counter increment must happen in a transaction together.
+  ( do STM.check =<< STM.readTVar interrupt
+       pure interruptToken
+  ) <|>
+  ( do token1 <- STM.readTVar tv
+       STM.check (isTokenReady token1)
+       STM.modifyTVar' counter (+1)
+       pure token1
+  )
+
+-- Not yet present in primitive library.
+newPinnedPrimArray :: forall a. Prim a
+  => Int -> IO (MutablePrimArray RealWorld a)
+{-# INLINE newPinnedPrimArray #-}
+newPinnedPrimArray (I# n#)
+  = PM.primitive (\s# -> case Exts.newPinnedByteArray# (n# *# PM.sizeOf# (undefined :: a)) s# of
+      (# s'#, arr# #) -> (# s'#, MutablePrimArray arr# #))
 
 -- [Notes on registration]
 -- This interface requires every call to @register@ to be paired with

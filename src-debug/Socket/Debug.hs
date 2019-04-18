@@ -3,8 +3,12 @@ module Socket.Debug
   , whenDebugging
   ) where
 
+import System.IO (hFlush,stdout)
+
 debug :: String -> IO ()
-debug = putStrLn
+debug str = do
+  putStrLn str
+  hFlush stdout
 
 whenDebugging :: IO () -> IO ()
 whenDebugging = id
