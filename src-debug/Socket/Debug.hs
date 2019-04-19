@@ -1,6 +1,7 @@
 module Socket.Debug
   ( debug
   , whenDebugging
+  , debugging
   ) where
 
 import System.IO (hFlush,stdout)
@@ -12,3 +13,6 @@ debug str = do
 
 whenDebugging :: IO () -> IO ()
 whenDebugging = id
+
+debugging :: Bool
+debugging = True

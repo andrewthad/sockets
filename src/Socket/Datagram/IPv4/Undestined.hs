@@ -30,6 +30,7 @@ module Socket.Datagram.IPv4.Undestined
   ) where
 
 import Control.Concurrent (threadWaitWrite,threadWaitRead)
+import Control.Concurrent.STM (TVar)
 import Control.Exception (throwIO,mask,onException)
 import Data.Primitive (ByteArray,MutableByteArray(..))
 import Data.Word (Word16)
@@ -44,14 +45,17 @@ import Socket.Datagram (SendException(..),ReceiveException(..))
 import Socket.Datagram.IPv4.Undestined.Internal (Message(..),Socket(..))
 import Socket.Datagram.IPv4.Undestined.Multiple (receiveMany,receiveManyUnless)
 import Socket.Debug (debug)
+import Socket.EventManager (Token)
 import Socket.IPv4 (Endpoint(..),describeEndpoint)
 
-import qualified Socket as SCK
+import qualified Control.Concurrent.STM as STM
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
 import qualified Posix.Socket as S
+import qualified Socket as SCK
+import qualified Socket.EventManager as EM
 
 -- | Open a socket and run the supplied callback on it. This closes the socket
 -- when the callback finishes or when an exception is thrown. Do not return 
@@ -76,6 +80,8 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
       functionWithSocket
       ["socket",describeEndpoint endpoint,describeErrorCode err]
     Right fd -> do
+      let !mngr = EM.manager
+      EM.register mngr fd
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
       debug ("withSocket: requested binding for " ++ describeEndpoint endpoint)
@@ -127,15 +133,16 @@ withSocket endpoint@Endpoint{port = specifiedPort} f = mask $ \restore -> do
                   ["close",describeEndpoint endpoint,describeErrorCode err]
                 Right _ -> pure (Right a)
 
--- | Send a slice of a bytearray to the specified endpoint.
-send ::
-     Socket -- ^ Socket
+internalSend ::
+     TVar Token
+  -> Token -- ^ Old token
+  -> Socket -- ^ Socket
   -> Endpoint -- ^ Remote IPv4 address and port
   -> ByteArray -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
-  -> IO (Either SocketException ())
-send (Socket !s) !theRemote !thePayload !off !len = do
+  -> IO (Either (SendException 'Uninterruptible) ())
+internalSend !tv !token0 (Socket !s) !theRemote !thePayload !off !len = do
   debug ("send: about to send to " ++ show theRemote)
   e1 <- S.uninterruptibleSendToByteArray s thePayload
     (intToCInt off)
@@ -146,32 +153,28 @@ send (Socket !s) !theRemote !thePayload !off !len = do
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        debug ("send: waiting to for write ready to send to " ++ show theRemote)
-        threadWaitWrite s
-        e2 <- S.uninterruptibleSendToByteArray s thePayload
-          (intToCInt off)
-          (intToCSize len)
-          mempty
-          (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
-        case e2 of
-          Left err2 -> do
-            debug ("send: encountered error after sending")
-            throwIO $ SocketUnrecoverableException
-              moduleSocketDatagramIPv4Undestined
-              functionSend
-              [show theRemote,describeErrorCode err2]
-          Right sz -> if csizeToInt sz == len
-            then pure (Right ())
-            else pure (Left (SentMessageTruncated (csizeToInt sz)))
-      else throwIO $ SocketUnrecoverableException
-        moduleSocketDatagramIPv4Undestined
-        functionSend
-        [show theRemote,describeErrorCode err1]
+        token1 <- EM.unreadyAndWait token0 tv
+        internalSend tv token1 (Socket s) theRemote thePayload off len
+      else handleSendException functionSendMutableByteArray err1
     Right sz -> if csizeToInt sz == len
       then do
         debug ("send: success")
         pure (Right ())
-      else pure (Left (SentMessageTruncated (csizeToInt sz)))
+      else pure (Left (SendTruncated (csizeToInt sz)))
+
+-- | Send a slice of a bytearray to the specified endpoint.
+send ::
+     Socket -- ^ Socket
+  -> Endpoint -- ^ Remote IPv4 address and port
+  -> ByteArray -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Lenth of slice into buffer
+  -> IO (Either (SendException 'Uninterruptible) ())
+send (Socket !s) !theRemote !thePayload !off !len = do
+  let !mngr = EM.manager
+  tv <- EM.writer mngr s
+  token0 <- STM.readTVarIO tv
+  internalSend tv token0 (Socket s) theRemote thePayload off len
 
 -- | Send a slice of a bytearray to the specified endpoint.
 sendMutableByteArraySlice ::
@@ -182,6 +185,20 @@ sendMutableByteArraySlice ::
   -> Int -- ^ Lenth of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArraySlice (Socket !s) !theRemote !thePayload !off !len = do
+  let !mngr = EM.manager
+  tv <- EM.writer mngr s
+  internalSendMutableByteArraySlice tv (Socket s) theRemote thePayload off len
+
+internalSendMutableByteArraySlice ::
+     TVar Token
+  -> Socket -- ^ Socket
+  -> Endpoint -- ^ Remote IPv4 address and port
+  -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
+  -> Int -- ^ Offset into payload
+  -> Int -- ^ Lenth of slice into buffer
+  -> IO (Either (SendException 'Uninterruptible) ())
+internalSendMutableByteArraySlice !tv (Socket !s) !theRemote !thePayload !off !len = do
+  token <- EM.wait tv
   debug ("send mutable: about to send to " ++ show theRemote)
   e1 <- S.uninterruptibleSendToMutableByteArray s thePayload
     (intToCInt off)
@@ -192,20 +209,8 @@ sendMutableByteArraySlice (Socket !s) !theRemote !thePayload !off !len = do
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        debug ("send mutable: waiting to for write ready to send to " ++ show theRemote)
-        threadWaitWrite s
-        e2 <- S.uninterruptibleSendToMutableByteArray s thePayload
-          (intToCInt off)
-          (intToCSize len)
-          mempty
-          (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
-        case e2 of
-          Left err2 -> do
-            debug ("send mutable: encountered error after sending")
-            handleSendException functionSendMutableByteArray err2
-          Right sz -> if csizeToInt sz == len
-            then pure (Right ())
-            else pure (Left (SendTruncated (csizeToInt sz)))
+        EM.unready token tv
+        internalSendMutableByteArraySlice tv (Socket s) theRemote thePayload off len
       else handleSendException functionSendMutableByteArray err1
     Right sz -> if csizeToInt sz == len
       then do
@@ -218,9 +223,19 @@ receiveByteArray ::
      Socket -- ^ Socket
   -> Int -- ^ Maximum size of datagram to receive
   -> IO (Either (ReceiveException 'Uninterruptible) Message)
-receiveByteArray (Socket !fd) !maxSz = do
-  debug "receive: about to wait"
-  threadWaitRead fd
+receiveByteArray (Socket !s) !maxSz = do
+  let !mngr = EM.manager
+  tv <- EM.reader mngr s
+  token0 <- STM.readTVarIO tv
+  internalReceiveByteArray tv token0 (Socket s) maxSz
+
+internalReceiveByteArray ::
+     TVar Token -- ^ Token variable
+  -> Token -- ^ Old token
+  -> Socket -- ^ Socket
+  -> Int -- ^ Maximum size of datagram to receive
+  -> IO (Either (ReceiveException 'Uninterruptible) Message)
+internalReceiveByteArray !tv !token0 (Socket !fd) !maxSz = do
   debug "receive: socket is now readable"
   marr <- PM.newByteArray maxSz
   -- We use MSG_TRUNC so that we are able to figure out whether
@@ -231,10 +246,16 @@ receiveByteArray (Socket !fd) !maxSz = do
     (intToCSize maxSz) (L.truncate) S.sizeofSocketAddressInternet
   debug "receive: finished reading from socket"
   case e of
-    Left err -> throwIO $ SocketUnrecoverableException
-      moduleSocketDatagramIPv4Undestined
-      functionReceive
-      [describeErrorCode err]
+    Left err -> if err == eWOULDBLOCK || err == eAGAIN
+      then do
+        debug "receive: about to wait"
+        token1 <- EM.unreadyAndWait token0 tv
+        internalReceiveByteArray tv token1 (Socket fd) maxSz
+      -- TODO: fix this else clause
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketDatagramIPv4Undestined
+        functionReceive
+        [describeErrorCode err]
     Right (sockAddrRequiredSz,sockAddr,recvSz) -> if csizeToInt recvSz <= maxSz
       then if sockAddrRequiredSz == S.sizeofSocketAddressInternet
         then case S.decodeSocketAddressInternet sockAddr of
@@ -252,6 +273,33 @@ receiveByteArray (Socket !fd) !maxSz = do
           [SCK.crecvfrom,SCK.socketAddressSize]
       else pure (Left (ReceiveTruncated (csizeToInt recvSz)))
 
+internalReceiveMutableByteArraySlice_ ::
+     TVar Token
+  -> Token
+  -> Socket -- ^ Socket
+  -> MutableByteArray RealWorld -- ^ Buffer
+  -> Int -- ^ Offset into buffer
+  -> Int -- ^ Maximum size of datagram to receive
+  -> IO (Either SocketException Int)
+internalReceiveMutableByteArraySlice_ !tv !token0 (Socket !fd) !buf !off !maxSz = do
+  -- We use MSG_TRUNC so that we are able to figure out whether
+  -- or not bytes were discarded. If bytes were discarded
+  -- (meaning that the buffer was too small), we return an
+  -- exception.
+  e <- S.uninterruptibleReceiveFromMutableByteArray_ fd buf (intToCInt off) (intToCSize maxSz) (L.truncate)
+  case e of
+    Left err -> if err == eWOULDBLOCK || err == eAGAIN
+      then do
+        token1 <- EM.unreadyAndWait token0 tv
+        internalReceiveMutableByteArraySlice_ tv token1 (Socket fd) buf off maxSz
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketDatagramIPv4Undestined
+        functionReceiveMutableByteArray
+        [describeErrorCode err]
+    Right recvSz -> if csizeToInt recvSz <= maxSz
+      then pure (Right (csizeToInt recvSz))
+      else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
+
 -- | Receive a datagram into a mutable byte array, ignoring information about
 --   the remote endpoint. Returns the actual number of bytes present in the
 --   datagram. Precondition: @buffer_length - offset >= max_datagram_length@.
@@ -262,20 +310,10 @@ receiveMutableByteArraySlice_ ::
   -> Int -- ^ Maximum size of datagram to receive
   -> IO (Either SocketException Int)
 receiveMutableByteArraySlice_ (Socket !fd) !buf !off !maxSz = do
-  threadWaitRead fd
-  -- We use MSG_TRUNC so that we are able to figure out whether
-  -- or not bytes were discarded. If bytes were discarded
-  -- (meaning that the buffer was too small), we return an
-  -- exception.
-  e <- S.uninterruptibleReceiveFromMutableByteArray_ fd buf (intToCInt off) (intToCSize maxSz) (L.truncate)
-  case e of
-    Left err -> throwIO $ SocketUnrecoverableException
-      moduleSocketDatagramIPv4Undestined
-      functionReceiveMutableByteArray
-      [describeErrorCode err]
-    Right recvSz -> if csizeToInt recvSz <= maxSz
-      then pure (Right (csizeToInt recvSz))
-      else pure (Left (ReceivedMessageTruncated (csizeToInt recvSz)))
+  let !mngr = EM.manager
+  tv <- EM.reader mngr fd
+  token0 <- STM.readTVarIO tv
+  internalReceiveMutableByteArraySlice_ tv token0 (Socket fd) buf off maxSz
 
 -- TODO: add receiveTimeout
 -- receiveTimeout ::

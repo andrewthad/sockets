@@ -102,7 +102,7 @@ import GHC.Conc.Sync (yield)
 import GHC.Exts (RealWorld,Int(I#),(*#))
 import Numeric (showIntAtBase)
 import Socket.Error (die)
-import Socket.Debug (debug,whenDebugging)
+import Socket.Debug (debug,whenDebugging,debugging)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Types (Fd)
 
@@ -208,14 +208,13 @@ manager = unsafePerformIO $ do
       let go !ix = if ix > (-1)
             then do
               _ <- forkOn ix $ do
-                let !initSz = 1
+                let !initSz = if debugging then 1 else 8
                 !initArr <- newPinnedPrimArray initSz
                 loopManager initArr initSz epoll variables
               go (ix - 1)
             else pure ()
-      -- TODO: A single worker thread for now.
-      go 0
-      -- go (capNum - 1)
+      -- In debugging mode, spawn a single event manager thread.
+      go (if debugging then 0 else capNum)
       pure (Manager {variables,novars,epoll})
 
 reader :: Manager -> Fd -> IO (TVar Token)
