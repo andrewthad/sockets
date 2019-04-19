@@ -144,11 +144,11 @@ internalSend ::
   -> IO (Either (SendException 'Uninterruptible) ())
 internalSend !tv !token0 (Socket !s) !theRemote !thePayload !off !len = do
   debug ("send: about to send to " ++ show theRemote)
-  e1 <- S.uninterruptibleSendToByteArray s thePayload
+  e1 <- S.uninterruptibleSendToInternetByteArray s thePayload
     (intToCInt off)
     (intToCSize len)
     mempty
-    (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
+    (endpointToSocketAddressInternet theRemote)
   debug ("send: just sent to " ++ show theRemote)
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
@@ -200,11 +200,11 @@ internalSendMutableByteArraySlice ::
 internalSendMutableByteArraySlice !tv (Socket !s) !theRemote !thePayload !off !len = do
   token <- EM.wait tv
   debug ("send mutable: about to send to " ++ show theRemote)
-  e1 <- S.uninterruptibleSendToMutableByteArray s thePayload
+  e1 <- S.uninterruptibleSendToInternetMutableByteArray s thePayload
     (intToCInt off)
     (intToCSize len)
     mempty
-    (S.encodeSocketAddressInternet (endpointToSocketAddressInternet theRemote))
+    (endpointToSocketAddressInternet theRemote)
   debug ("send mutable: just sent to " ++ show theRemote)
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
