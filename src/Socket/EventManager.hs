@@ -133,8 +133,8 @@ register mngr@Manager{epoll} !fd = do
   (ixTier2, tier2) <- constructivelyLookupTier1 (fdToInt fd) mngr
   let ixRead = ixTier2 * 2
       ixWrite = ixRead + 1
-  readVar <- PM.readUnliftedArray tier2 ixRead
-  writeVar <- PM.readUnliftedArray tier2 ixWrite
+  readVar <- readTVarArray tier2 ixRead
+  writeVar <- readTVarArray tier2 ixWrite
   -- It should not be necessary to batch these in the same atomically
   -- since this function should only ever be called with exceptions
   -- masked. However, we do it anyway since it might improve performance.
@@ -229,10 +229,10 @@ lookupBoth ::
   -> IO (TVar Token,TVar Token)
 lookupBoth !fd !arr = do
   let (ixTier1,ixTier2) = decompose fd
-  tier2 <- PM.readUnliftedArray arr ixTier1
+  tier2 <- readMutableUnliftedArrayArray arr ixTier1
   liftA2 (,)
-    (PM.readUnliftedArray tier2 (ixTier2 * 2))
-    (PM.readUnliftedArray tier2 (ixTier2 * 2 + 1))
+    (readTVarArray tier2 (ixTier2 * 2))
+    (readTVarArray tier2 (ixTier2 * 2 + 1))
 
 -- The file descriptor must already be registered. Otherwise, this
 -- function may look in an uninitialized tier-two array.
@@ -241,11 +241,10 @@ lookupGeneric ::
   -> Int -- File descriptor
   -> MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld (TVar Token))
   -> IO (TVar Token)
-{-# inline lookupGeneric #-}
 lookupGeneric !rw !fd !arr = do
   let (ixTier1,ixTier2) = decompose fd
-  tier2 <- PM.readUnliftedArray arr ixTier1
-  PM.readUnliftedArray tier2 ((ixTier2 * 2) + rw)
+  tier2 <- readMutableUnliftedArrayArray arr ixTier1
+  readTVarArray tier2 ((ixTier2 * 2) + rw)
 
 constructivelyLookupTier1 ::
      Int -- File descriptor
@@ -253,7 +252,7 @@ constructivelyLookupTier1 ::
   -> IO (Int, MUArray (TVar Token))
 constructivelyLookupTier1 !fd Manager{variables,novars} = do
   let (ixTier1,ixTier2) = decompose fd
-  varsTier2 <- PM.readUnliftedArray variables ixTier1
+  varsTier2 <- readMutableUnliftedArrayArray variables ixTier1
   if PM.sameMutableUnliftedArray varsTier2 novars
     then do
       -- We want 2 * 2^N tvars because there is a separate read and
@@ -262,7 +261,7 @@ constructivelyLookupTier1 !fd Manager{variables,novars} = do
       varsAttempt <- PM.unsafeNewUnliftedArray len
       let goVars !ix = if ix > (-1)
             then do
-              PM.writeUnliftedArray varsAttempt ix
+              writeTVarArray varsAttempt ix
                 =<< STM.newTVarIO emptyToken
               goVars (ix - 1)
             else pure ()
@@ -622,6 +621,35 @@ newPinnedPrimArray :: forall a. Prim a
 newPinnedPrimArray (I# n#)
   = PM.primitive (\s# -> case Exts.newPinnedByteArray# (n# *# PM.sizeOf# (undefined :: a)) s# of
       (# s'#, arr# #) -> (# s'#, MutablePrimArray arr# #))
+
+-- For some reason, GHC fails to inline readUnliftedArray correctly.
+-- So, we manually specialize it here.
+readTVarArray                                                           
+  :: MutableUnliftedArray RealWorld (TVar a) -- ^ source                       
+  -> Int -- ^ index                                                         
+  -> IO (TVar a)
+readTVarArray (MutableUnliftedArray maa#) (I# i#)                       
+  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of                
+      (# s', aa# #) -> (# s',  PM.fromArrayArray# aa# #)                       
+
+-- For some reason, GHC fails to inline readUnliftedArray correctly.
+-- So, we manually specialize it here.
+readMutableUnliftedArrayArray
+  :: MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ source
+  -> Int -- ^ index
+  -> IO (MutableUnliftedArray RealWorld a)
+readMutableUnliftedArrayArray (MutableUnliftedArray maa#) (I# i#)
+  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of
+      (# s', aa# #) -> (# s',  PM.fromArrayArray# aa# #)
+
+-- See readTVarArray
+writeTVarArray
+  :: MutableUnliftedArray RealWorld (TVar a) -- ^ destination
+  -> Int -- ^ index
+  -> TVar a -- ^ value
+  -> IO ()
+writeTVarArray (PM.MutableUnliftedArray maa#) (I# i#) a
+  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# (PM.toArrayArray# a))
 
 -- [Notes on registration]
 -- This interface requires every call to @register@ to be paired with
