@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
@@ -101,6 +102,7 @@ import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified Socket as SCK
 import qualified Socket.EventManager as EM
+import qualified GHC.Exts as Exts
 import qualified GHC.ForeignPtr as FP
 
 -- | A socket that listens for incomming connections.
@@ -815,7 +817,7 @@ sendMutableByteArray ::
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> IO (Either (SendException 'Uninterruptible) ())
 sendMutableByteArray conn arr =
-  sendMutableByteArraySlice conn arr 0 =<< PM.getSizeofMutableByteArray arr
+  sendMutableByteArraySlice conn arr 0 =<< getSizeofMutableByteArray arr
 
 sendMutableByteArraySlice ::
      Connection -- ^ Connection
@@ -1227,7 +1229,7 @@ receiveMutableByteArray ::
   -> MutableByteArray RealWorld
   -> IO (Either (ReceiveException 'Uninterruptible) ())
 receiveMutableByteArray !conn0 !marr0 = do
-  !total <- PM.getSizeofMutableByteArray marr0
+  !total <- getSizeofMutableByteArray marr0
   receiveMutableByteArraySlice conn0 marr0 0 total
 
 -- | Receive up to the given number of bytes, using the given array and
@@ -1487,6 +1489,14 @@ interruptibleWaitRead !abandon !fd = do
     ((bool retry (pure False) =<< readTVar abandon) <|> (isReady $> True))
   deregister
   pure shouldReceive
+
+getSizeofMutableByteArray
+  :: PM.PrimMonad m => MutableByteArray (PM.PrimState m) -> m Int
+{-# INLINE getSizeofMutableByteArray #-}
+getSizeofMutableByteArray (MutableByteArray arr#) = PM.primitive
+  (\s# -> case Exts.getSizeofMutableByteArray# arr# s# of
+    (# s'#, n# #) -> (# s'#, I# n# #)
+  )
 
 {- $unbracketed
  

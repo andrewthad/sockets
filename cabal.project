@@ -1,1 +1,5 @@
-packages: . ../posix-api ../primitive-atomic ../primitive-checked
+packages: .
+source-repository-package
+  type: git
+  location: https://github.com/andrewthad/posix-api
+  tag: 64cc5be9d0bc01792dea5c1060e07df003d1ff72
