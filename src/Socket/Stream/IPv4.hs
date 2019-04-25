@@ -41,7 +41,10 @@ module Socket.Stream.IPv4
   , receiveMutableByteArraySlice
   , receiveByteString
   , interruptibleReceiveByteArray
+  , interruptibleReceiveMutableByteArray
+  , interruptibleReceiveMutableByteArraySlice
   , interruptibleReceiveBoundedMutableByteArraySlice
+  , interruptibleReceiveBoundedByteStringSlice
     -- * Exceptions
   , SendException(..)
   , ReceiveException(..)
@@ -1279,6 +1282,47 @@ receiveBetweenMutableByteArraySlice !conn@(Connection fd) !minBytes !maxBytes !m
       moduleSocketStreamIPv4
       functionReceiveBetweenMutableByteArraySlice
       [SCK.negativeSliceLength]
+
+interruptibleReceiveBoundedByteStringSlice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> Int -- ^ Maximum number of bytes to receive
+  -> Int -- ^ Offset into the buffer
+  -> IO (Either (ReceiveException 'Interruptible) ByteString) -- ^ Either a socket exception or the number of ByteString we allocated
+interruptibleReceiveBoundedByteStringSlice !abandon !conn !total !off = do
+  marr@(MutableByteArray marr#) <- PM.newPinnedByteArray total
+  interruptibleReceiveBoundedMutableByteArraySlice abandon conn total marr off >>= \case
+    Left err -> pure (Left err)
+    Right _ -> pure (Right (BI.PS (FP.ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (FP.PlainPtr marr#)) 0 total))
+
+-- | Receive bytes using the given array. This can be interrupted
+--   by the completion of an 'STM' transaction.
+interruptibleReceiveMutableByteArray ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
+  -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
+interruptibleReceiveMutableByteArray !abandon !conn !marr
+  = interruptibleReceiveMutableByteArraySlice abandon conn marr 0
+
+-- | Receive bytes using the given array and
+--   starting at the given offset. This can be interrupted by the
+--   completion of an 'STM' transaction.
+interruptibleReceiveMutableByteArraySlice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
+  -> Int -- ^ Offset into the buffer
+  -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
+interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off = do
+  let !sz = PM.sizeofMutableByteArray marr
+  interruptibleReceiveBoundedMutableByteArraySlice abandon conn sz marr off
 
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset. This can be interrupted by the
