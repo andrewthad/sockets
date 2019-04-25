@@ -94,6 +94,7 @@ data CloseException :: Type where
   --   living above layer 4 of the OSI model.
   ClosePeerContinuedSending :: CloseException
 
+deriving stock instance Eq CloseException
 deriving stock instance Show CloseException
 deriving anyclass instance Exception CloseException
 
@@ -113,6 +114,7 @@ data AcceptException :: Interruptibility -> Type where
   -- | STM-style interrupt (much safer than C-style interrupt)
   AcceptInterrupted :: AcceptException 'Interruptible
 
+deriving stock instance Eq (AcceptException i)
 deriving stock instance Show (AcceptException i)
 deriving anyclass instance (Typeable i) => Exception (AcceptException i)
 
@@ -129,6 +131,7 @@ data SendException :: Interruptibility -> Type where
   -- | STM-style interrupt (much safer than C-style interrupt)
   SendInterrupted :: SendException 'Interruptible
 
+deriving stock instance Eq (SendException i)
 deriving stock instance Show (SendException i)
 deriving anyclass instance Typeable i => Exception (SendException i)
 
@@ -164,5 +167,6 @@ data ReceiveException :: Interruptibility -> Type where
   -- | STM-style interrupt (much safer than C-style interrupt)
   ReceiveInterrupted :: ReceiveException 'Interruptible
 
+deriving stock instance Eq (ReceiveException i)
 deriving stock instance Show (ReceiveException i)
 deriving anyclass instance Typeable i => Exception (ReceiveException i)
