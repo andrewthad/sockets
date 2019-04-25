@@ -94,6 +94,7 @@ data CloseException :: Type where
   --   living above layer 4 of the OSI model.
   ClosePeerContinuedSending :: CloseException
 
+deriving stock instance Eq CloseException
 deriving stock instance Show CloseException
 deriving anyclass instance Exception CloseException
 
