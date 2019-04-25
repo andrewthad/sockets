@@ -21,6 +21,8 @@ module Socket.EventManager
   , unready
   , wait
   , unreadyAndWait
+  , persistentUnreadyAndWait
+  , persistentUnready
   , interruptibleWait
   , interruptibleWaitCounting
   , isInterrupt
@@ -92,7 +94,7 @@ import Control.Concurrent.STM (TVar)
 import Control.Monad (when)
 import Control.Monad.STM (atomically)
 import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
-import Data.Bits (testBit)
+import Data.Bits (testBit,unsafeShiftR)
 import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
 import Data.Primitive (Prim)
 import Data.Word (Word64,Word32)
@@ -140,8 +142,8 @@ register mngr@Manager{epoll} !fd = do
   -- masked. However, we do it anyway since it might improve performance.
   -- It's difficult to test this theory.
   atomically $ do
-    STM.modifyTVar' readVar readyToken
-    STM.modifyTVar' writeVar readyToken
+    STM.modifyTVar' readVar resetToken
+    STM.modifyTVar' writeVar resetToken
   -- Enough space for a single registration.
   ev <- PM.newPrimArray 1
   debug ("register: registering fd " ++ show fd)
@@ -313,31 +315,6 @@ stepManager !evs0 !sz0 !epfd !tier1 = do
               whenDebugging $ do
                 actualSize <- PM.getSizeofMutablePrimArray evs0
                 when (actualSize /= sz0) (die "stepManager: bad size")
-                -- let !(MutablePrimArray evs0#) = evs0
-                -- let untypedEvs0 = MutableByteArray evs0#
-                -- let byteSz = actualSize * 12
-                -- PM.fillByteArray untypedEvs0 0 byteSz 0xFF
-                -- This is expected to be garbage.
-                -- Epoll.Event{Epoll.events,Epoll.payload} <- PM.readPrimArray evs0 0
-                -- let fd = payload :: Fd
-                -- let Epoll.Events e = events
-                -- let bitmask = showIntAtBase 2 binChar e ""
-                -- (w0 :: Word32) <- PM.readByteArray untypedEvs0 0
-                -- (w1 :: Word32) <- PM.readByteArray untypedEvs0 1
-                -- (w2 :: Word32) <- PM.readByteArray untypedEvs0 2
-                -- debug $ "stepManager: element 0 raw before third attempt " ++ 
-                --   lpad 32 (showIntAtBase 2 binChar w0 "") ++ " " ++
-                --   lpad 32 (showIntAtBase 2 binChar w1 "") ++ " " ++
-                --   lpad 32 (showIntAtBase 2 binChar w2 "")
-                -- debug $ "stepManager: element 0 before third attempt " ++ show fd ++ " " ++ bitmask
-                -- when (sz0 > 1) $ do
-                --   (w0a :: Word32) <- PM.readByteArray untypedEvs0 3
-                --   (w1a :: Word32) <- PM.readByteArray untypedEvs0 4
-                --   (w2a :: Word32) <- PM.readByteArray untypedEvs0 5
-                --   debug $ "stepManager: element 1 raw before third attempt " ++ 
-                --     lpad 32 (showIntAtBase 2 binChar w0a "") ++ " " ++
-                --     lpad 32 (showIntAtBase 2 binChar w1a "") ++ " " ++
-                --     lpad 32 (showIntAtBase 2 binChar w2a "")
               Epoll.waitMutablePrimArray epfd evs0 (intToCInt sz0) (-1) >>= \case
                 Left (Errno code) -> die $ "Socket.EventManager.stepManager: C " ++ show code
                 Right len2 -> if len2 > 0
@@ -393,6 +370,7 @@ handleEvents !evs !len !sz !vars = do
       let fd = payload
       let hasReadInclusive = Epoll.containsAnyEvents events
             (Epoll.input <> Epoll.readHangup <> Epoll.error <> Epoll.hangup)
+      let hasPersistentReadInclusive = Epoll.containsAnyEvents events Epoll.readHangup
       let hasWriteInclusive = Epoll.containsAnyEvents events
             (Epoll.output <> Epoll.error <> Epoll.hangup)
       let hasRead = Epoll.containsAnyEvents events Epoll.input
@@ -411,7 +389,12 @@ handleEvents !evs !len !sz !vars = do
           "] error [" ++ show hasError ++
           "] priority [" ++ show hasPriority ++ "]"
       (readVar,writeVar) <- lookupBoth (fdToInt fd) vars
-      when hasReadInclusive $ atomically $ STM.modifyTVar' readVar readyToken
+      when hasReadInclusive $ atomically $ do
+        old <- STM.readTVar readVar
+        let !new = if hasPersistentReadInclusive
+              then persistentReadyToken old
+              else readyToken old
+        STM.writeTVar readVar new
       when hasWriteInclusive $ atomically $ STM.modifyTVar' writeVar readyToken
     ) evs 0 len
   if | len < sz -> pure (evs,sz)
@@ -491,49 +474,92 @@ fdToInt = fromIntegral
 
 -- Token is an optimization of the data type:
 --   data Token = Token
---     { ready :: Bool, eventCount :: Word63 }
+--     { ready :: Bool, pready :: Bool, interrupt :: Bool, eventCount :: Word61 }
 -- Invariant: the bytearray has length 8.
 -- The descriptor counter and the event counter are represented in
 -- the predictable way. The readiness bit is the highest bit. Visually:
---   |XYYYYYYY|YYYYYYYY|YYYYYYYY|YYYYYYYY|YYYYYYYY|YYYYYYYY|YYYYYYYY|YYYYYYYY
--- X: readiness (1 is ready, 0 is not ready)
--- Y: event counter
--- Since a 63-bit word has so many inhabitants, we pretend that it will
+--   |WXYZZZZZ|ZZZZZZZZ|ZZZZZZZZ|ZZZZZZZZ|ZZZZZZZZ|ZZZZZZZZ|ZZZZZZZZ|ZZZZZZZZ
+-- W: readiness (1 is ready, 0 is not ready)
+-- X: persistent readiness (only used for read channel, set by EPOLLRDHUP)
+-- Y: interruptness (only used for interruptible waiting)
+-- Z: event counter
+--
+-- Since a 62-bit word has so many inhabitants, we pretend that it will
 -- never wrap around. In practice, an application would need to run for
 -- trillions of years for overflow to happen.
+--
+-- The notion of persistent readiness is only relevant when dealing with
+-- the read channel. Why does it even exist? Consider the following two
+-- desirable behaviors:
+-- 
+-- 1. Avoid unneeded @recv@ syscalls. That is, if a @recv@ returns
+--    something less that the full number of bytes requested, we want
+--    to unready the token. The next time we want to @recv@, we want to wait
+--    for the token to be ready before even attempting a @recv@.
+-- 2. We want to be properly notification when the peer shuts down. Epoll
+--    reports this as EPOLLRDHUP.
+--
+-- The difficulty is that, without persistent readiness, performing
+-- optimization (1), can lead to a hung application. So, we introduce a
+-- persistent readiness. This is set when the EPOLLRDHUP notification
+-- is delivered. It is only allowed to be reset when a @recv@ returns
+-- EAGAIN, not by merely not receiving enough bytes. One might ask:
+-- Why should it ever need to be reset? Recall that because of the way
+-- this event manager is designed, it is always possible to receive
+-- a notification that was intended for a previous user of the
+-- file descriptor.
 newtype Token = Token Word64
 
 readyBit :: Word64
 readyBit = 0x8000000000000000
 
+persistentReadyBits :: Word64
+persistentReadyBits = 0xC000000000000000
+
+-- Preserves persistent readiness and interruptedness
 unreadyBit :: Word64
 unreadyBit = 0x7FFFFFFFFFFFFFFF
 
 eqToken :: Token -> Token -> Bool
 eqToken (Token a) (Token b) = a == b
 
--- The empty token has readiness set to true. We start at event
--- counter 1 since 0 is reserved as the interrupt.
+-- The empty token has readiness set to true and persistent readiness
+-- set to false.
 emptyToken :: Token
-emptyToken = Token (readyBit .|. 1)
+emptyToken = Token readyBit
 
 interruptToken :: Token
-interruptToken = Token 0
+interruptToken = Token 0x2000000000000000
 
 isTokenReady :: Token -> Bool
-isTokenReady (Token w) = testBit w 63
+isTokenReady (Token w) = unsafeShiftR w 62 /= 0
 
 isInterrupt :: Token -> Bool
-isInterrupt (Token w) = w == 0
+isInterrupt (Token w) = (0x2000000000000000 == w)
 
--- Increments the event counter. Sets readiness to true. Leaves
--- the descriptor counter alone.
+-- Increments the event counter. Sets readiness to true.
+-- Leaves persistent readiness alone. Leaves interruptedness
+-- alone.
 readyToken :: Token -> Token
 readyToken (Token w) = Token (readyBit .|. (w + 1))
 
--- | Sets the readiness to false. Increments the event counter.
+persistentReadyToken :: Token -> Token
+persistentReadyToken (Token w) = Token (persistentReadyBits .|. (w + 1))
+
+-- Increments the event counter. Sets readiness to true. Sets
+-- persistent readiness and interruptness to false.
+resetToken :: Token -> Token
+resetToken (Token w) = Token ((readyBit .|. (w + 1)) .&. 0x9FFFFFFFFFFFFFFF)
+
+-- | Sets the readiness to false. Leaves the persisted readiness alone.
+-- Does not affect the interruptedness. Increments the event counter.
 unreadyToken :: Token -> Token
 unreadyToken (Token w) = Token (unreadyBit .&. (w + 1))
+
+-- | Sets the readiness, the persisted readiness, and the interruptedness
+-- to false. Increments the event counter.
+persistentUnreadyToken :: Token -> Token
+persistentUnreadyToken (Token w) = Token (0x1FFFFFFFFFFFFFFF .&. (w + 1))
 
 -- | Why does 'unready' need the previous token value. At first glance,
 -- it seems that it would suffice to simply set something to false
@@ -554,12 +580,30 @@ unready !oldToken !tv = atomically $ do
     then STM.writeTVar tv $! unreadyToken oldToken
     else pure ()
 
+persistentUnready ::
+     Token -- ^ Token provided by previous call to wait
+  -> TVar Token -- ^ Transactional variable for readiness
+  -> IO ()
+persistentUnready !oldToken !tv = atomically $ do
+  newToken <- STM.readTVar tv
+  if eqToken oldToken newToken
+    then STM.writeTVar tv $! persistentUnreadyToken oldToken
+    else pure ()
+
 unreadyAndWait ::
      Token -- ^ Token provided by previous call to wait
   -> TVar Token -- ^ Transactional variable for readiness
   -> IO Token -- ^ New token
 unreadyAndWait !oldToken !tv = do
   unready oldToken tv
+  wait tv
+
+persistentUnreadyAndWait ::
+     Token -- ^ Token provided by previous call to wait
+  -> TVar Token -- ^ Transactional variable for readiness
+  -> IO Token -- ^ New token
+persistentUnreadyAndWait !oldToken !tv = do
+  persistentUnready oldToken tv
   wait tv
 
 -- | Wait until the token indicates readiness. Keep in mind that
@@ -604,7 +648,7 @@ interruptibleWaitCounting :: TVar Int -> TVar Bool -> TVar Token -> IO Token
 interruptibleWaitCounting !counter !interrupt !tv = atomically $
   -- We cannot go to the same lengths to avoid a transaction as
   -- we do in interruptibleWait. Notablely, the token check and
-  -- an the counter increment must happen in a transaction together.
+  -- the counter increment must happen in a transaction together.
   ( do STM.check =<< STM.readTVar interrupt
        pure interruptToken
   ) <|>

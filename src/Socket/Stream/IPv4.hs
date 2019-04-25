@@ -35,7 +35,9 @@ module Socket.Stream.IPv4
   , receiveByteArray
   , receiveBoundedByteArray
   , receiveBoundedMutableByteArraySlice
+  , receiveBetweenMutableByteArraySlice
   , receiveMutableByteArray
+  , receiveMutableByteArraySlice
   , receiveByteString
   , interruptibleReceiveByteArray
   , interruptibleReceiveBoundedMutableByteArraySlice
@@ -61,8 +63,8 @@ module Socket.Stream.IPv4
   ) where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent (ThreadId, threadWaitRead, threadWaitWrite)
-import Control.Concurrent (threadWaitReadSTM,threadWaitWriteSTM)
+import Control.Concurrent (ThreadId)
+import Control.Concurrent (threadWaitReadSTM)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Exception (mask, mask_, onException, throwIO)
 import Control.Monad.STM (atomically,retry)
@@ -230,16 +232,11 @@ accept (Listener !fd) = do
         debug ("accept: calling waitlessAccept for " ++ show fd)
         waitlessAccept fd >>= \case
           Left merr -> case merr of
-            Nothing -> do
-              -- There is a slightly more efficient way to combine
-              -- unready and wait. Worry about that later.
-              EM.unready oldToken tv
-              debug ("accept: waitlessAccept not ready, waiting, fd=" ++ show fd)
-              newToken <- EM.wait tv
-              go newToken
+            Nothing -> EM.unreadyAndWait oldToken tv >>= go
             Just err -> pure (Left err)
-          Right r -> do
+          Right r@(Connection conn,_) -> do
             debug ("accept: waitlessAccept succeeded for " ++ show fd)
+            EM.register mngr conn
             pure (Right r)
   go =<< STM.readTVarIO tv
 
@@ -252,6 +249,7 @@ interruptibleAccept ::
   -> Listener
   -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
 interruptibleAccept !abandon (Listener fd) = do
+  -- TODO: pull these out of the loop
   let !mngr = EM.manager
   tv <- EM.reader mngr fd
   token <- EM.interruptibleWait abandon tv
@@ -263,7 +261,9 @@ interruptibleAccept !abandon (Listener fd) = do
           EM.unready token tv
           interruptibleAccept abandon (Listener fd)
         Just err -> pure (Left err)
-      Right r -> pure (Right r)
+      Right r@(Connection conn,_) -> do
+        EM.register mngr conn
+        pure (Right r)
 
 -- Only used internally
 interruptibleAcceptCounting :: 
@@ -272,6 +272,7 @@ interruptibleAcceptCounting ::
   -> Listener
   -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
 interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
+  -- TODO: pull these out of the loop
   let !mngr = EM.manager
   tv <- EM.reader mngr fd
   token <- EM.interruptibleWait abandon tv
@@ -283,12 +284,14 @@ interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
           EM.unready token tv
           interruptibleAcceptCounting counter abandon (Listener fd)
         Just err -> pure (Left err)
-      Right r -> pure (Right r)
+      Right r@(Connection conn,_) -> do
+        EM.register mngr conn
+        pure (Right r)
 
 -- We use the maybe to mean that the user needs to wait again.
 waitlessAccept :: Fd -> IO (Either (Maybe (AcceptException i)) (Connection,Endpoint))
 waitlessAccept lstn = do
-  S.uninterruptibleAccept lstn S.sizeofSocketAddressInternet >>= \case
+  L.uninterruptibleAccept4 lstn S.sizeofSocketAddressInternet (L.closeOnExec <> L.nonblocking) >>= \case
     Left err -> handleAcceptException "waitlessAccept" err
     Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
       then case S.decodeSocketAddressInternet sockAddr of
@@ -310,42 +313,45 @@ waitlessAccept lstn = do
           [SCK.cgetsockname,SCK.socketAddressSize]
 
 gracefulCloseA :: Fd -> IO (Either CloseException ())
-gracefulCloseA fd = S.uninterruptibleShutdown fd S.write >>= \case
-  -- On Linux (not sure about others), calling shutdown
-  -- on the write channel fails with with ENOTCONN if the
-  -- write channel is already closed. It is common for this to
-  -- happen (e.g. if the peer calls @close@ before the local
-  -- process runs gracefulClose, the local operating system
-  -- will have already closed the write channel). However,
-  -- it does not pose a problem. We just proceed as we would
-  -- have since either way we become certain that the write channel
-  -- is closed.
-  Left err -> if err == eNOTCONN
-    then gracefulCloseB fd
-    else do
-      _ <- S.uninterruptibleClose fd
-      -- TODO: What about ENOTCONN? Can this happen if the remote
-      -- side has already closed the connection?
-      throwIO $ SocketUnrecoverableException
-        moduleSocketStreamIPv4
-        SCK.functionGracefulClose
-        [SCK.cshutdown,describeErrorCode err]
-  Right _ -> gracefulCloseB fd
-
-gracefulCloseB :: Fd -> IO (Either CloseException ())
-gracefulCloseB !fd = do
+gracefulCloseA fd = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr fd
-  token <- EM.wait tv
-  buf <- PM.newByteArray 1
+  token0 <- STM.readTVarIO tv
+  S.uninterruptibleShutdown fd S.write >>= \case
+    -- On Linux (not sure about others), calling shutdown
+    -- on the write channel fails with with ENOTCONN if the
+    -- write channel is already closed. It is common for this to
+    -- happen (e.g. if the peer calls @close@ before the local
+    -- process runs gracefulClose, the local operating system
+    -- will have already closed the write channel). However,
+    -- it does not pose a problem. We just proceed as we would
+    -- have since either way we become certain that the write channel
+    -- is closed.
+    Left err -> if err == eNOTCONN
+      then gracefulCloseB tv token0 fd
+      else do
+        _ <- S.uninterruptibleClose fd
+        -- TODO: What about ENOTCONN? Can this happen if the remote
+        -- side has already closed the connection?
+        throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          SCK.functionGracefulClose
+          [SCK.cshutdown,describeErrorCode err]
+    Right _ -> gracefulCloseB tv token0 fd
+
+-- The second part of the shutdown function must call itself recursively
+-- since we may receive false read-ready notifications at any time.
+gracefulCloseB :: TVar EM.Token -> EM.Token -> Fd -> IO (Either CloseException ())
+gracefulCloseB !tv !token0 !fd = do
+  !buf <- PM.newByteArray 1
   -- We do not actually want to remove the bytes from the
   -- receive buffer, so we use MSG_PEEK. We are be certain
   -- to send a reset when a CloseException is reported.
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 S.peek >>= \case
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        EM.unready token tv
-        gracefulCloseB fd
+        token1 <- EM.persistentUnreadyAndWait token0 tv
+        gracefulCloseB tv token1 fd
       else do
         _ <- S.uninterruptibleClose fd
         -- We treat all @recv@ errors except for the nonblocking
@@ -881,7 +887,8 @@ internalSendMutable ::
 internalSendMutable !conn@(Connection s) !payload !off !len = do
   let !mngr = EM.manager
   tv <- EM.writer mngr s
-  veryInternalSendMutable tv conn payload off len
+  token0 <- STM.readTVarIO tv
+  veryInternalSendMutable tv token0 conn payload off len
 
 -- Precondition: the length must be greater than zero.
 veryInternalSend :: 
@@ -893,6 +900,7 @@ veryInternalSend ::
   -> IO (Either (SendException 'Uninterruptible) CSize)
 veryInternalSend !tv (Connection !s) !payload !off !len = do
   token <- EM.wait tv
+  debug "veryInternalSend: about to send"
   e1 <- S.uninterruptibleSendByteArray s payload
     (intToCInt off)
     (intToCSize len)
@@ -900,6 +908,7 @@ veryInternalSend !tv (Connection !s) !payload !off !len = do
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
+        debug "veryInternalSend: EAGAIN"
         EM.unready token tv
         veryInternalSend tv (Connection s) payload off len
       else handleSendException "sendMutableByteArraySlice" err1
@@ -908,13 +917,13 @@ veryInternalSend !tv (Connection !s) !payload !off !len = do
 -- Precondition: the length must be greater than zero.
 veryInternalSendMutable :: 
      TVar EM.Token -- ^ Write-channel readiness
+  -> EM.Token -- ^ Old token
   -> Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) CSize)
-veryInternalSendMutable !tv (Connection !s) !payload !off !len = do
-  token <- EM.wait tv
+veryInternalSendMutable !tv !token0 (Connection !s) !payload !off !len = do
   e1 <- S.uninterruptibleSendMutableByteArray s payload
     (intToCInt off)
     (intToCSize len)
@@ -922,8 +931,8 @@ veryInternalSendMutable !tv (Connection !s) !payload !off !len = do
   case e1 of
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
-        EM.unready token tv
-        veryInternalSendMutable tv (Connection s) payload off len
+        token1 <- EM.unreadyAndWait token0 tv
+        veryInternalSendMutable tv token1 (Connection s) payload off len
       else handleSendException "sendMutableByteArraySlice" err1
     Right sz -> pure (Right sz)
 
@@ -997,9 +1006,11 @@ internalSendAddr ::
   -> Addr -- ^ Buffer start address
   -> Int -- ^ Length of slice into buffer
   -> IO (Either (SendException 'Uninterruptible) CSize)
-internalSendAddr !conn !payload !len = veryInternalSendAddr
-  (\fd -> threadWaitWrite fd *> pure (Right ()))
-  conn payload len
+internalSendAddr !conn@(Connection s) !payload !len = do
+  let !mngr = EM.manager
+  !tv <- EM.writer mngr s
+  token0 <- STM.readTVarIO tv
+  veryInternalSendAddr tv token0 conn payload len
 
 -- Precondition: the length must be greater than zero.
 internalInterruptibleSend ::
@@ -1016,13 +1027,13 @@ internalInterruptibleSend !abandon !conn@(Connection s) !payload !off !len = do
 
 -- Precondition: the length must be greater than zero.
 veryInternalSendAddr ::
-     (Fd -> IO (Either (SendException i) ()))
+     TVar EM.Token -- ^ Write-channel readiness
+  -> EM.Token -- ^ Old token
   -> Connection -- ^ Connection
   -> Addr -- ^ Buffer start address
   -> Int -- ^ Length of payload
   -> IO (Either (SendException i) CSize)
-{-# INLINE veryInternalSendAddr #-}
-veryInternalSendAddr wait (Connection !s) !payload !len = do
+veryInternalSendAddr !tv !token0 (Connection !s) !payload !len = do
   debug ("veryInternalSendAddr: about to send chunk on stream socket, length " ++ show len)
   e1 <- S.uninterruptibleSend s payload
     (intToCSize len)
@@ -1032,17 +1043,8 @@ veryInternalSendAddr wait (Connection !s) !payload !len = do
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
         debug "veryInternalSendAddr: waiting to for write ready on stream socket"
-        wait s >>= \case
-          Left e -> pure (Left e)
-          Right _ -> do
-            e2 <- S.uninterruptibleSend s payload
-              (intToCSize len)
-              (S.noSignal)
-            case e2 of
-              Left err2 -> do
-                debug "veryInternalSendAddr: encountered error after sending chunk on stream socket"
-                handleSendException functionSendByteArray err2
-              Right sz -> pure (Right sz)
+        token1 <- EM.unreadyAndWait token0 tv
+        veryInternalSendAddr tv token1 (Connection s) payload len
       else handleSendException functionSendByteArray err1
     Right sz -> pure (Right sz)
 
@@ -1055,20 +1057,65 @@ veryInternalSendAddr wait (Connection !s) !payload !len = do
 -- necessary. This function does use the event manager to wait
 -- for the socket to be ready for reads.
 internalReceiveMaximally ::
-     Connection -- ^ Connection
+     TVar EM.Token
+  -> Connection -- ^ Connection
   -> Int -- ^ Maximum number of bytes to receive
   -> MutableByteArray RealWorld -- ^ Receive buffer
   -> Int -- ^ Offset into buffer
   -> IO (Either (ReceiveException i) Int)
-internalReceiveMaximally (Connection !fd) !maxSz !buf !off = do
-  debug "receive: stream socket about to wait"
-  threadWaitRead fd
-  debug ("receive: stream socket is now readable, receiving up to " ++ show maxSz ++ " bytes at offset " ++ show off)
+internalReceiveMaximally !tv (Connection !fd) !maxSz !buf !off = do
+  -- The way recv interacts with the event manager is unusual. For
+  -- many other functions, we do not know in advance whether or
+  -- not the read channel is ready. For example, to @accept@, we
+  -- must start with the syscall since a previous call to @accept@
+  -- never would have given us information about readiness.
+  debug "internalReceiveMaximally: stream socket about to wait"
+  !token <- EM.wait tv
+  debug ("internalReceiveMaximally: stream socket is now readable, receiving up to " ++ show maxSz ++ " bytes at offset " ++ show off)
   e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
-  debug "receive: finished reading from stream socket"
+  debug "internalReceiveMaximally: finished reading from stream socket"
   case e of
-    Left err -> handleReceiveException "internalReceiveMaximally" err
-    Right recvSz -> pure (Right (csizeToInt recvSz))
+    Left err -> if err == eAGAIN || err == eWOULDBLOCK
+      then do
+        debug "internalReceiveMaximally: EAGAIN"
+        EM.persistentUnready token tv
+        internalReceiveMaximally tv (Connection fd) maxSz buf off
+      else handleReceiveException "internalReceiveMaximally" err
+    Right recvSz -> do
+      -- when (recvSz < maxSz) $ do
+      --   EM.unready token tv
+      pure (Right (csizeToInt recvSz))
+
+internalReceiveBetween ::
+     TVar EM.Token
+  -> Connection -- ^ Connection
+  -> Int -- ^ Minimum number of bytes to receive
+  -> Int -- ^ Maximum number of bytes to receive
+  -> Int -- ^ Total number of bytes received
+  -> MutableByteArray RealWorld -- ^ Receive buffer
+  -> Int -- ^ Offset into buffer
+  -> IO (Either (ReceiveException i) Int) -- ^ Actual number of bytes received
+internalReceiveBetween !tv (Connection !fd) !minSz !maxSz !total !buf !off
+  | minSz <= 0 = pure $! Right $! total 
+  | otherwise = do
+      !token <- EM.wait tv
+      e <- S.uninterruptibleReceiveMutableByteArray fd buf (intToCInt off) (intToCSize maxSz) mempty
+      case e of
+        Left err -> if err == eAGAIN || err == eWOULDBLOCK
+          then do
+            debug "internalReceiveBetween: EAGAIN"
+            EM.persistentUnready token tv
+            internalReceiveBetween tv (Connection fd) minSz maxSz total buf off
+          else handleReceiveException "internalReceiveBetween" err
+        Right recvSzCInt -> if recvSzCInt /= 0
+          then do
+            let recvSz = fromIntegral recvSzCInt :: Int
+            -- when (recvSz < maxSz) $ do
+            --   EM.unready token tv
+            internalReceiveBetween tv (Connection fd)
+              (minSz - recvSz) (maxSz - recvSz) (total + recvSz)
+              buf (off + recvSz)
+          else pure (Left ReceiveShutdown)
 
 internalInterruptibleReceiveMaximally ::
      TVar Bool -- ^ If this completes, give up on receiving
@@ -1095,8 +1142,10 @@ receiveByteArray ::
      Connection -- ^ Connection
   -> Int -- ^ Number of bytes to receive
   -> IO (Either (ReceiveException 'Uninterruptible) ByteArray)
-receiveByteArray !conn !total =
-  internalReceiveByteArray internalReceiveMaximally conn total
+receiveByteArray !conn@(Connection fd) !total = do
+  let !mngr = EM.manager
+  !tv <- EM.reader mngr fd
+  internalReceiveByteArray (internalReceiveMaximally tv) conn total
 
 -- | Variant of 'receiveByteArray' that support STM-style interrupts.
 interruptibleReceiveByteArray ::
@@ -1115,7 +1164,7 @@ internalReceiveByteArray ::
   -> Connection
   -> Int
   -> IO (Either (ReceiveException i) ByteArray)
-internalReceiveByteArray recvMax !conn0 !total = do
+internalReceiveByteArray !recvMax !conn0 !total = do
   marr <- PM.newByteArray total
   go conn0 marr 0 total
   where
@@ -1149,22 +1198,37 @@ receiveByteString !conn !total = do
 --   byte array. If the remote application shuts down its end of the
 --   connection before sending the required number of bytes, this returns
 --   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
+receiveMutableByteArraySlice ::
+     Connection
+  -> MutableByteArray RealWorld
+  -> Int -- ^ offset
+  -> Int -- ^ length, exact number of bytes to receive
+  -> IO (Either (ReceiveException 'Uninterruptible) ())
+receiveMutableByteArraySlice !conn0@(Connection fd) !marr0 !off0 !len0 = do
+  let !mngr = EM.manager
+  !tv0 <- EM.reader mngr fd
+  go tv0 conn0 marr0 off0 len0
+  where
+  go !tv !conn !marr !off !remaining = if remaining > 0
+    then do
+      internalReceiveMaximally tv conn remaining marr off >>= \case
+        Left err -> pure (Left err)
+        Right sz -> if sz /= 0
+          then go tv conn marr (off + sz) (remaining - sz)
+          else pure (Left ReceiveShutdown)
+    else pure (Right ())
+
+-- | Receive a number of bytes exactly equal to the size of the mutable
+--   byte array. If the remote application shuts down its end of the
+--   connection before sending the required number of bytes, this returns
+--   @'Left' ('SocketException' 'Receive' 'RemoteShutdown')@.
 receiveMutableByteArray ::
      Connection
   -> MutableByteArray RealWorld
   -> IO (Either (ReceiveException 'Uninterruptible) ())
 receiveMutableByteArray !conn0 !marr0 = do
-  total <- PM.getSizeofMutableByteArray marr0
-  go conn0 marr0 0 total
-  where
-  go !conn !marr !off !remaining = if remaining > 0
-    then do
-      internalReceiveMaximally conn remaining marr off >>= \case
-        Left err -> pure (Left err)
-        Right sz -> if sz /= 0
-          then go conn marr (off + sz) (remaining - sz)
-          else pure (Left ReceiveShutdown)
-    else pure (Right ())
+  !total <- PM.getSizeofMutableByteArray marr0
+  receiveMutableByteArraySlice conn0 marr0 0 total
 
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset.
@@ -1174,9 +1238,11 @@ receiveBoundedMutableByteArraySlice ::
   -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
   -> Int -- ^ Offset in the buffer
   -> IO (Either (ReceiveException 'Uninterruptible) Int) -- ^ Either a socket exception or the number of bytes read
-receiveBoundedMutableByteArraySlice !conn !total !marr !off
+receiveBoundedMutableByteArraySlice !conn@(Connection fd) !total !marr !off
   | total > 0 = do
-      internalReceiveMaximally conn total marr off >>= \case
+      let !mngr = EM.manager
+      !tv <- EM.reader mngr fd
+      internalReceiveMaximally tv conn total marr off >>= \case
         Left err -> pure (Left err)
         Right sz -> if sz /= 0
           then pure (Right sz)
@@ -1185,6 +1251,31 @@ receiveBoundedMutableByteArraySlice !conn !total !marr !off
   | otherwise = throwIO $ SocketUnrecoverableException
       moduleSocketStreamIPv4
       functionReceiveMutableByteArraySlice
+      [SCK.negativeSliceLength]
+
+-- | Receive up to the given number of bytes, using the given array and
+--   starting at the given offset.
+receiveBetweenMutableByteArraySlice ::
+     Connection -- ^ Connection
+  -> Int -- ^ Minimum number of bytes to receive
+  -> Int -- ^ Maximum number of bytes to receive
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data are going to be stored
+  -> Int -- ^ Offset in the buffer
+  -> IO (Either (ReceiveException 'Uninterruptible) Int) -- ^ Either a socket exception or the number of bytes read
+receiveBetweenMutableByteArraySlice !conn@(Connection fd) !minBytes !maxBytes !marr !off
+  | maxBytes > 0 = if minBytes >= 0 && minBytes <= maxBytes
+      then do
+        let !mngr = EM.manager
+        !tv <- EM.reader mngr fd
+        internalReceiveBetween tv conn minBytes maxBytes 0 marr off
+      else throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionReceiveBetweenMutableByteArraySlice
+        [SCK.negativeSliceLength]
+  | maxBytes == 0 && minBytes == 0 = pure (Right 0)
+  | otherwise = throwIO $ SocketUnrecoverableException
+      moduleSocketStreamIPv4
+      functionReceiveBetweenMutableByteArraySlice
       [SCK.negativeSliceLength]
 
 -- | Receive up to the given number of bytes, using the given array and
@@ -1281,6 +1372,9 @@ functionReceiveByteArray = "receiveByteArray"
 functionReceiveMutableByteArraySlice :: String
 functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
 
+functionReceiveBetweenMutableByteArraySlice :: String
+functionReceiveBetweenMutableByteArraySlice = "receiveBetweenMutableByteArraySlice"
+
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
 
@@ -1357,7 +1451,7 @@ handleSocketListenException func e
 --
 -- NB: EACCES only happens on @bind@, not on @listen@.
 handleBindListenException :: Word16 -> String -> Errno -> IO (Either SocketException a)
-handleBindListenException thePort func e
+handleBindListenException !thePort func !e
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
       then pure (Left SocketAddressInUse)
@@ -1391,27 +1485,6 @@ interruptibleWaitRead !abandon !fd = do
   (isReady,deregister) <- threadWaitReadSTM fd
   shouldReceive <- atomically
     ((bool retry (pure False) =<< readTVar abandon) <|> (isReady $> True))
-  deregister
-  pure shouldReceive
-
-interruptibleWaitWrite :: TVar Bool -> Fd -> IO Bool
-interruptibleWaitWrite !abandon !fd = do
-  (isReady,deregister) <- threadWaitWriteSTM fd
-  shouldSend <- atomically
-    ((bool retry (pure False) =<< readTVar abandon) <|> (isReady $> True))
-  deregister
-  pure shouldSend
-
-interruptibleWaitReadCounting :: TVar Int -> TVar Bool -> Fd -> IO Bool
-interruptibleWaitReadCounting !counter !abandon !fd = do
-  (isReady,deregister) <- threadWaitReadSTM fd
-  shouldReceive <- atomically $ do
-    readTVar abandon >>= \case
-      False -> do
-        isReady
-        modifyTVar' counter (+1)
-        pure True
-      True -> pure False
   deregister
   pure shouldReceive
 
