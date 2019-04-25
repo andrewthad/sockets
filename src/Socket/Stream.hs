@@ -76,6 +76,7 @@ data ConnectException :: Interruptibility -> Type where
   -- | STM-style interrupt (much safer than C-style interrupt)
   ConnectInterrupted :: ConnectException 'Interruptible
 
+deriving stock instance Eq (ConnectException i)
 deriving stock instance Show (ConnectException i)
 deriving anyclass instance Typeable i => Exception (ConnectException i)
 
