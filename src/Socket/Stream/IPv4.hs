@@ -1295,7 +1295,7 @@ interruptibleReceiveBoundedByteStringSlice !abandon !conn !total !off = do
   marr@(MutableByteArray marr#) <- PM.newPinnedByteArray total
   interruptibleReceiveBoundedMutableByteArraySlice abandon conn total marr off >>= \case
     Left err -> pure (Left err)
-    Right _ -> pure (Right (BI.PS (FP.ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (FP.PlainPtr marr#)) 0 total))
+    Right len -> pure (Right (BI.PS (FP.ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (FP.PlainPtr marr#)) len total))
 
 -- | Receive bytes using the given array. This can be interrupted
 --   by the completion of an 'STM' transaction.
