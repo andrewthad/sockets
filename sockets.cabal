@@ -56,6 +56,11 @@ flag mmsg
   description: Use sendmmsg and recvmmsg 
   default: False
 
+flag verbose-errors
+  manual: True
+  description: More informative messages from internal errors
+  default: False
+
 flag debug
   manual: True
   description: Print debug output 
@@ -78,6 +83,7 @@ library
     Socket.Datagram.IPv4.Undestined.Multiple
     Socket.Datagram.IPv4.Undestined.Internal
     Socket.Debug
+    Socket.Error
     Socket.IPv4
     Socket
   build-depends:
@@ -86,9 +92,8 @@ library
     , error-codes >= 0.1 && < 0.2
     , ip >= 1.4.1
     , posix-api >= 0.2.1
-    , primitive >= 0.6.4
+    , primitive-checked >= 0.6.4
     , primitive-atomic
-    , primitive-unlifted
     , stm >= 2.4
     , text >= 1.2
   hs-source-dirs: src
@@ -96,12 +101,16 @@ library
     hs-source-dirs: src-debug
   else
     hs-source-dirs: src-production
+  if flag(debug) || flag(verbose-errors)
+    hs-source-dirs: src-err
+  else
+    hs-source-dirs: src-noerr
   if flag(mmsg)
     hs-source-dirs: src-mmsg
   else
     hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
 test-suite test
   type: exitcode-stdio-1.0
@@ -132,6 +141,19 @@ benchmark macro
   default-language: Haskell2010
   hs-source-dirs: bench
   main-is: Macro.hs
+
+benchmark http
+  type: exitcode-stdio-1.0
+  build-depends:
+    , base >= 4.11.1.0 && < 5
+    , sockets
+    , ip >= 1.4.1
+    , primitive >= 0.6.4
+    , bytestring >= 0.10.8.2
+  ghc-options: -Wall -O2 -threaded -rtsopts
+  default-language: Haskell2010
+  hs-source-dirs: bench
+  main-is: Http.hs
 
 executable sockets-example
   if flag(example)

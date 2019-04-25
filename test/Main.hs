@@ -68,6 +68,7 @@ tests canSpoof = testGroup "socket"
         ]
       , testCase "C" testStreamC
       , testCase "D" testStreamD
+      , testCase "E" testStreamE
       ]
     ]
   ]
@@ -382,3 +383,31 @@ testDatagramSpoofB = do
     msg1 <- unhandled $ DIU.receiveByteArray sock 500
     msg2 <- unhandled $ DIU.receiveByteArray sock 500
     return (msg1,msg2)
+
+testStreamE :: Assertion
+testStreamE = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  received @=? (mconcat [messageA, messageB, messageC, messageD])
+  where
+  messageA = E.fromList [0..17] :: ByteArray
+  messageB = E.fromList [18..92] :: ByteArray
+  messageC = E.fromList [93..182] :: ByteArray
+  messageD = E.fromList [183..255] :: ByteArray
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = do
+    dstPort <- PM.takeMVar m
+    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+      unhandled $ SI.sendByteArray conn messageA
+      unhandled $ SI.sendByteArray conn messageB
+      unhandled $ SI.sendByteArray conn messageC
+      unhandled $ SI.sendByteArray conn messageD
+  receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
+  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+    PM.putMVar m port
+    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
+      marr <- PM.newByteArray 256
+      x <- unhandled $ SI.receiveBetweenMutableByteArraySlice conn 20 60 marr 0
+      y <- unhandled $ SI.receiveBetweenMutableByteArraySlice conn 100 150 marr x
+      unhandled $ SI.receiveMutableByteArraySlice conn marr (x + y) (256 - (x + y))
+      PM.unsafeFreezeByteArray marr
