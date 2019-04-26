@@ -1321,8 +1321,22 @@ interruptibleReceiveMutableByteArraySlice ::
   -> Int -- ^ Offset into the buffer
   -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
 interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off = do
-  let !sz = PM.sizeofMutableByteArray marr
-  interruptibleReceiveBoundedMutableByteArraySlice abandon conn sz marr off
+  !sz <- PM.getSizeofMutableByteArray marr
+  let recvMax = interruptibleReceiveBoundedMutableByteArraySlice
+  let go off' remaining = case compare remaining 0 of
+        GT -> do
+          recvMax abandon conn remaining marr off' >>= \case
+            Left err -> pure (Left err)
+            Right sz' -> if sz' /= 0
+              then go (off' + sz') (remaining - sz')
+              else pure (Left ReceiveShutdown)
+        EQ -> do
+          pure (Right sz)
+        LT -> throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          functionInterruptibleReceiveMutableByteArraySlice
+          [SCK.negativeSliceLength]
+  go off sz
 
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset. This can be interrupted by the
@@ -1420,6 +1434,9 @@ functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
 
 functionReceiveBetweenMutableByteArraySlice :: String
 functionReceiveBetweenMutableByteArraySlice = "receiveBetweenMutableByteArraySlice"
+
+functionInterruptibleReceiveMutableByteArraySlice :: String
+functionInterruptibleReceiveMutableByteArraySlice = "interruptibleReceiveMutableByteArraySlice"
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
