@@ -41,7 +41,10 @@ module Socket.Stream.IPv4
   , receiveMutableByteArraySlice
   , receiveByteString
   , interruptibleReceiveByteArray
+  , interruptibleReceiveMutableByteArray
+  , interruptibleReceiveMutableByteArraySlice
   , interruptibleReceiveBoundedMutableByteArraySlice
+  , interruptibleReceiveBoundedByteStringSlice
     -- * Exceptions
   , SendException(..)
   , ReceiveException(..)
@@ -1280,6 +1283,62 @@ receiveBetweenMutableByteArraySlice !conn@(Connection fd) !minBytes !maxBytes !m
       functionReceiveBetweenMutableByteArraySlice
       [SCK.negativeSliceLength]
 
+interruptibleReceiveBoundedByteStringSlice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> Int -- ^ Maximum number of bytes to receive
+  -> Int -- ^ Offset into the buffer
+  -> IO (Either (ReceiveException 'Interruptible) ByteString) -- ^ Either a socket exception or the newly allocated 'ByteString'
+interruptibleReceiveBoundedByteStringSlice !abandon !conn !total !off = do
+  marr@(MutableByteArray marr#) <- PM.newPinnedByteArray total
+  interruptibleReceiveBoundedMutableByteArraySlice abandon conn total marr off >>= \case
+    Left err -> pure (Left err)
+    Right len -> pure (Right (BI.PS (FP.ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (FP.PlainPtr marr#)) len total))
+
+-- | Receive bytes using the given array. This can be interrupted
+--   by the completion of an 'STM' transaction.
+interruptibleReceiveMutableByteArray ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
+  -> IO (Either (ReceiveException 'Interruptible) ()) -- ^ Either a socket exception or nothing. We don't return the number of bytes read as we do in some other functions since the only way we consider this a success is if @total_bytes == requested_bytes@.
+interruptibleReceiveMutableByteArray !abandon !conn !marr = do
+  !sz <- PM.getSizeofMutableByteArray marr
+  interruptibleReceiveMutableByteArraySlice abandon conn marr 0 sz
+
+-- | Receive bytes using the given array and
+--   starting at the given offset. This can be interrupted by the
+--   completion of an 'STM' transaction.
+interruptibleReceiveMutableByteArraySlice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
+  -> Int -- ^ Offset into the buffer
+  -> Int -- ^ Length of slice
+  -> IO (Either (ReceiveException 'Interruptible) ()) -- ^ Either a socket exception or nothing. We don't return the number of bytes read as we do in some other functions since the only way we consider this a success is if @total_bytes == requested_bytes@
+interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off !sliceLen = do
+  let recvMax = interruptibleReceiveBoundedMutableByteArraySlice
+  let go off' remaining = case compare remaining 0 of
+        GT -> do
+          recvMax abandon conn remaining marr off' >>= \case
+            Left err -> pure (Left err)
+            Right sz' -> if sz' /= 0
+              then go (off' + sz') (remaining - sz')
+              else pure (Left ReceiveShutdown)
+        EQ -> do
+          pure (Right ())
+        LT -> throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          functionInterruptibleReceiveMutableByteArraySlice
+          [SCK.negativeSliceLength]
+  go off sliceLen
+
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset. This can be interrupted by the
 --   completion of an 'STM' transaction.
@@ -1376,6 +1435,9 @@ functionReceiveMutableByteArraySlice = "receiveMutableByteArraySlice"
 
 functionReceiveBetweenMutableByteArraySlice :: String
 functionReceiveBetweenMutableByteArraySlice = "receiveBetweenMutableByteArraySlice"
+
+functionInterruptibleReceiveMutableByteArraySlice :: String
+functionInterruptibleReceiveMutableByteArraySlice = "interruptibleReceiveMutableByteArraySlice"
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
