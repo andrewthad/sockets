@@ -92,7 +92,7 @@ library
     , error-codes >= 0.1 && < 0.2
     , ip >= 1.4.1
     , posix-api >= 0.2.1
-    , primitive-checked >= 0.6.4
+    , primitive >= 0.6.4
     , primitive-atomic
     , stm >= 2.4
     , text >= 1.2
