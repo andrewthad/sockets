@@ -1306,8 +1306,9 @@ interruptibleReceiveMutableByteArray ::
   -> Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
   -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
-interruptibleReceiveMutableByteArray !abandon !conn !marr
-  = interruptibleReceiveMutableByteArraySlice abandon conn marr 0
+interruptibleReceiveMutableByteArray !abandon !conn !marr = do
+  !sz <- PM.getSizeofMutableByteArray marr
+  interruptibleReceiveMutableByteArraySlice abandon conn marr 0 sz
 
 -- | Receive bytes using the given array and
 --   starting at the given offset. This can be interrupted by the
@@ -1319,9 +1320,9 @@ interruptibleReceiveMutableByteArraySlice ::
   -> Connection -- ^ Connection
   -> MutableByteArray RealWorld -- ^ Buffer in which the data is going to be stored
   -> Int -- ^ Offset into the buffer
+  -> Int -- ^ Length of slice
   -> IO (Either (ReceiveException 'Interruptible) Int) -- ^ Either a socket exception or the number of bytes read
-interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off = do
-  !sz <- PM.getSizeofMutableByteArray marr
+interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off !sliceLen = do
   let recvMax = interruptibleReceiveBoundedMutableByteArraySlice
   let go off' remaining = case compare remaining 0 of
         GT -> do
@@ -1331,12 +1332,12 @@ interruptibleReceiveMutableByteArraySlice !abandon !conn !marr !off = do
               then go (off' + sz') (remaining - sz')
               else pure (Left ReceiveShutdown)
         EQ -> do
-          pure (Right sz)
+          pure (Right (sliceLen - off + 1))
         LT -> throwIO $ SocketUnrecoverableException
           moduleSocketStreamIPv4
           functionInterruptibleReceiveMutableByteArraySlice
           [SCK.negativeSliceLength]
-  go off sz
+  go off sliceLen
 
 -- | Receive up to the given number of bytes, using the given array and
 --   starting at the given offset. This can be interrupted by the
