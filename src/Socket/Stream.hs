@@ -13,7 +13,7 @@ module Socket.Stream
   , CloseException(..)
   ) where
 
-import Socket (Direction(..),Interruptibility(..),Forkedness(..))
+import Socket (Interruptibility(..))
 import Socket.IPv4 (SocketException(..))
 
 import Data.Kind (Type)
@@ -77,6 +77,7 @@ data ConnectException :: Interruptibility -> Type where
   ConnectInterrupted :: ConnectException 'Interruptible
 
 deriving stock instance Eq (ConnectException i)
+deriving stock instance Ord (ConnectException i)
 deriving stock instance Show (ConnectException i)
 deriving anyclass instance Typeable i => Exception (ConnectException i)
 
@@ -95,6 +96,7 @@ data CloseException :: Type where
   ClosePeerContinuedSending :: CloseException
 
 deriving stock instance Eq CloseException
+deriving stock instance Ord CloseException
 deriving stock instance Show CloseException
 deriving anyclass instance Exception CloseException
 
@@ -115,6 +117,7 @@ data AcceptException :: Interruptibility -> Type where
   AcceptInterrupted :: AcceptException 'Interruptible
 
 deriving stock instance Eq (AcceptException i)
+deriving stock instance Ord (AcceptException i)
 deriving stock instance Show (AcceptException i)
 deriving anyclass instance (Typeable i) => Exception (AcceptException i)
 
@@ -132,6 +135,7 @@ data SendException :: Interruptibility -> Type where
   SendInterrupted :: SendException 'Interruptible
 
 deriving stock instance Eq (SendException i)
+deriving stock instance Ord (SendException i)
 deriving stock instance Show (SendException i)
 deriving anyclass instance Typeable i => Exception (SendException i)
 
@@ -168,5 +172,6 @@ data ReceiveException :: Interruptibility -> Type where
   ReceiveInterrupted :: ReceiveException 'Interruptible
 
 deriving stock instance Eq (ReceiveException i)
+deriving stock instance Ord (ReceiveException i)
 deriving stock instance Show (ReceiveException i)
 deriving anyclass instance Typeable i => Exception (ReceiveException i)
