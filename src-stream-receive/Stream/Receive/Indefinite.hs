@@ -1,6 +1,8 @@
 {-# language BangPatterns #-}
 {-# language LambdaCase #-}
+{-# language MagicHash #-}
 {-# language MultiWayIf #-}
+{-# language UnboxedTuples #-}
 
 module Stream.Receive.Indefinite
   ( receiveExactly
@@ -12,6 +14,8 @@ import Control.Monad (when)
 import Control.Concurrent.STM (TVar)
 import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eCONNRESET)
 import Foreign.C.Types (CSize)
+import GHC.Exts (RealWorld,State#,Int(I#),Int#)
+import GHC.IO (IO(IO))
 import Socket.Error (die)
 import Socket.EventManager (Token)
 import Socket.Stream (ReceiveException(..),Connection(..))
@@ -30,7 +34,7 @@ receiveExactly :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveExcept
 receiveExactly !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr conn
-  e <- receiveLoop intr conn tv buf (Buffer.length buf) 0
+  e <- box $ receiveLoop intr conn tv buf (Buffer.length buf) 0
   case e of 
     Left err -> pure (Left err)
     -- Discard the total since it is known to be equal to the
@@ -44,7 +48,7 @@ receiveOnce :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException
 receiveOnce !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr conn
-  receiveLoop intr conn tv buf 1 0
+  box $ receiveLoop intr conn tv buf 1 0
 
 -- Receive a number of bytes bounded on the upper end by the buffer length
 -- and on the lower end by the integer argument. This will make repeated
@@ -55,17 +59,35 @@ receiveBetween !intr (Connection !conn) !buf !minLen
       then do
         let !mngr = EM.manager
         !tv <- EM.reader mngr conn
-        receiveLoop intr conn tv buf minLen 0
+        box $ receiveLoop intr conn tv buf minLen 0
       else die "Socket.Stream.IPv4.receive: negative slice length"
   | Buffer.length buf == 0 && minLen == 0 = pure (Right 0)
   | otherwise = die "Socket.Stream.IPv4.receive: negative slice length"
 
+type Result# = State# RealWorld -> (# State# RealWorld, (# ReceiveException Intr | Int# #) #)
+
+unbox :: IO (Either (ReceiveException Intr) Int) -> Result#
+{-# inline unbox #-}
+unbox (IO f) = \s0 -> case f s0 of
+  (# s1, e #) -> case e of
+    Left err -> (# s1, (# err | #) #)
+    Right (I# i) -> (# s1, (# | i #) #)
+
+box :: Result# -> IO (Either (ReceiveException Intr) Int)
+box f = IO $ \s0 -> case f s0 of
+  (# s1, e #) -> case e of
+    (# err | #) -> (# s1, Left err #)
+    (# | i #) -> (# s1, Right (I# i) #)
+
+-- We unbox the result since GHC is not very good at CPR analysis.
 receiveLoop ::
      Interrupt -> Fd -> TVar Token -> Buffer
-  -> Int -> Int -> IO (Either (ReceiveException Intr) Int)
+  -> Int -> Int
+  -> Result#
+     -- result is isomorphic to IO (Either (ReceiveException Intr) Int)
 receiveLoop !intr !conn !tv !buf !minLen !total
-  | minLen <= 0 = pure $! Right $! total
-  | otherwise = do
+  | minLen <= 0 = unbox (pure (Right total))
+  | otherwise = unbox $ do
       let !maxLen = Buffer.length buf
       !token <- wait intr tv
       case tokenToReceiveException token of
@@ -74,7 +96,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
           Left err ->
             if | err == eAGAIN || err == eWOULDBLOCK -> do
                    EM.persistentUnready token tv
-                   receiveLoop intr conn tv buf minLen total
+                   box $ receiveLoop intr conn tv buf minLen total
                | err == eCONNRESET -> pure (Left ReceiveReset)
                | otherwise -> die ("Socket.Stream.IPv4.receive: " ++ describeErrorCode err)
           Right recvSzCInt -> if recvSzCInt /= 0
@@ -83,7 +105,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
               -- This unready only works because of a guarantee that epoll
               -- makes in the man page in FAQ question 9.
               when (recvSz < maxLen) (EM.unready token tv)
-              receiveLoop intr conn tv
+              box $ receiveLoop intr conn tv
                 (Buffer.advance buf recvSz) (minLen - recvSz) (total + recvSz)
             else pure (Left ReceiveShutdown)
 
