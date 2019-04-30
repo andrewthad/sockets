@@ -154,6 +154,7 @@ library
     Socket.Datagram.IPv4.Spoof
     Socket.Datagram.IPv4.Undestined
     Socket.Stream.IPv4
+    Socket.Stream.Interruptible.ByteString
     Socket.Stream.Interruptible.Bytes
     Socket.Stream.Interruptible.Addr
     Socket.Stream.Interruptible.MutableBytes
