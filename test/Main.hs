@@ -11,8 +11,8 @@ import Control.Monad (replicateM_)
 import Control.Exception (Exception)
 import Control.Exception (throwIO)
 import Control.Monad.ST (runST)
-import Data.Bool (bool)
 import Data.ByteString (ByteString)
+import Data.Bytes.Types (Bytes(..),MutableBytes(..))
 import Data.Primitive (ByteArray)
 import Data.Word (Word16,Word8)
 import GHC.Exts (RealWorld)
@@ -29,6 +29,9 @@ import qualified Net.IPv4 as IPv4
 import qualified Socket.Datagram.IPv4.Spoof as DIS
 import qualified Socket.Datagram.IPv4.Undestined as DIU
 import qualified Socket.Stream.IPv4 as SI
+import qualified Socket.Stream.Uninterruptible.Bytes as UB
+import qualified Socket.Stream.Uninterruptible.MutableBytes as UMB
+import qualified Socket.Stream.Uninterruptible.ByteString as UBS
 
 main :: IO ()
 main = do
@@ -72,6 +75,9 @@ tests canSpoof = testGroup "socket"
       ]
     ]
   ]
+
+unsliced :: ByteArray -> Bytes
+unsliced arr = Bytes arr 0 (PM.sizeofByteArray arr)
 
 unhandled :: Exception e => IO (Either e a) -> IO a
 unhandled action = action >>= either throwIO pure
@@ -200,15 +206,15 @@ testStreamA = do
   sender m = do
     dstPort <- PM.takeMVar m
     unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      unhandled $ SI.sendByteArray conn szb
-      unhandled $ SI.sendByteArray conn message
+      unhandled $ UB.send conn (unsliced szb)
+      unhandled $ UB.send conn (unsliced message)
   receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
   receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
-      serializedSize <- unhandled $ SI.receiveByteArray conn (PM.sizeOf (undefined :: Int))
+      serializedSize <- unhandled $ UB.receiveExactly conn (PM.sizeOf (undefined :: Int))
       let theSize = PM.indexByteArray serializedSize 0 :: Int
-      result <- unhandled $ SI.receiveByteArray conn theSize
+      result <- unhandled $ UB.receiveExactly conn theSize
       pure result
 
 testStreamC :: Assertion
@@ -222,12 +228,12 @@ testStreamC = do
   sender m = do
     dstPort <- PM.takeMVar m
     unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      unhandled $ SI.sendByteString conn message
+      unhandled $ UBS.send conn message
   receiver :: PM.MVar RealWorld Word16 -> IO ByteString
   receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
-      unhandled $ SI.receiveByteString conn (B.length message)
+      unhandled $ UBS.receiveExactly conn (B.length message)
 
 -- This is intended to test creating sockets after other sockets have been
 -- closed.
@@ -247,7 +253,7 @@ testStreamD = do
     replicateM_ simultaneousClients $ forkIO $ do
       replicateM_ (div totalConns simultaneousClients) $ do
         _ <- unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-          let go = SI.sendByteArray conn message >>= \case
+          let go = UB.send conn (unsliced message) >>= \case
                 Left SI.SendShutdown -> pure ()
                 Left e -> throwIO e
                 Right () -> go
@@ -266,7 +272,7 @@ testStreamD = do
           Right () -> fail "testStreamD: unexpected behavior"
         )
         (\conn _ -> do
-          _ <- unhandled $ SI.receiveByteArray conn 1
+          _ <- unhandled $ UB.receiveExactly conn 1
           pure ()
         )
     replicateM_ totalConns $ PM.takeMVar counter
@@ -288,7 +294,7 @@ testStreamB megabytes = do
   sender m = do
     dstPort <- PM.takeMVar m
     unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      replicateM_ (32 * megabytes) $ unhandled $ SI.sendByteArray conn message
+      replicateM_ (32 * megabytes) $ unhandled $ UB.send conn (unsliced message)
   receiver :: PM.MVar RealWorld Word16 -> IO ()
   receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
@@ -298,7 +304,8 @@ testStreamB megabytes = do
             | remaining > 0 = do
                 let recvSize = min remaining chunkSize
                 PM.setByteArray buffer 0 chunkSize (0 :: Word8)
-                bytesReceived <- unhandled (SI.receiveBoundedMutableByteArraySlice conn recvSize buffer 0)
+                bytesReceived <- unhandled
+                  (UMB.receiveOnce conn (MutableBytes buffer 0 recvSize))
                 verifyClientSendBytes buffer bytesReceived >>= \case
                   True -> receiveLoop (remaining - bytesReceived)
                   False -> throwIO MagicByteMismatch
@@ -398,16 +405,16 @@ testStreamE = do
   sender m = do
     dstPort <- PM.takeMVar m
     unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      unhandled $ SI.sendByteArray conn messageA
-      unhandled $ SI.sendByteArray conn messageB
-      unhandled $ SI.sendByteArray conn messageC
-      unhandled $ SI.sendByteArray conn messageD
+      unhandled $ UB.send conn (unsliced messageA)
+      unhandled $ UB.send conn (unsliced messageB)
+      unhandled $ UB.send conn (unsliced messageC)
+      unhandled $ UB.send conn (unsliced messageD)
   receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
   receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       marr <- PM.newByteArray 256
-      x <- unhandled $ SI.receiveBetweenMutableByteArraySlice conn 20 60 marr 0
-      y <- unhandled $ SI.receiveBetweenMutableByteArraySlice conn 100 150 marr x
-      unhandled $ SI.receiveMutableByteArraySlice conn marr (x + y) (256 - (x + y))
+      x <- unhandled $ UMB.receiveBetween conn (MutableBytes marr 0 60) 20
+      y <- unhandled $ UMB.receiveBetween conn (MutableBytes marr x 150) 100
+      unhandled $ UMB.receiveExactly conn (MutableBytes marr (x + y) (256 - (x + y)))
       PM.unsafeFreezeByteArray marr

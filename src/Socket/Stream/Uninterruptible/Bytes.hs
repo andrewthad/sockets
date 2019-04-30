@@ -3,6 +3,12 @@
 {-# language LambdaCase #-}
 {-# language MagicHash #-}
 
+-- | Communicate over a connection using immutable byte arrays.
+-- Reception functions return 'ByteArray' instead of 'Bytes' since
+-- this result always takes up the entirity of a 'ByteArray'. The
+-- 'Bytes' would have redundant information since the offset would
+-- be zero and the length would be the length of the 'ByteArray'
+-- payload.
 module Socket.Stream.Uninterruptible.Bytes
   ( send
   , receiveExactly

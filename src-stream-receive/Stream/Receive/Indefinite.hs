@@ -29,7 +29,7 @@ import qualified Stream.Receive as Receive
 receiveExactly :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) ())
 receiveExactly !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
-  !tv <- EM.writer mngr conn
+  !tv <- EM.reader mngr conn
   e <- receiveLoop intr conn tv buf (Buffer.length buf) 0
   case e of 
     Left err -> pure (Left err)
@@ -43,7 +43,7 @@ receiveExactly !intr (Connection !conn) !buf = do
 receiveOnce :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) Int)
 receiveOnce !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
-  !tv <- EM.writer mngr conn
+  !tv <- EM.reader mngr conn
   receiveLoop intr conn tv buf 1 0
 
 -- Receive a number of bytes bounded on the upper end by the buffer length
@@ -54,7 +54,7 @@ receiveBetween !intr (Connection !conn) !buf !minLen
   | Buffer.length buf > 0 = if minLen >= 0 && minLen <= Buffer.length buf
       then do
         let !mngr = EM.manager
-        !tv <- EM.writer mngr conn
+        !tv <- EM.reader mngr conn
         receiveLoop intr conn tv buf minLen 0
       else die "Socket.Stream.IPv4.receive: negative slice length"
   | Buffer.length buf == 0 && minLen == 0 = pure (Right 0)
@@ -80,11 +80,11 @@ receiveLoop !intr !conn !tv !buf !minLen !total
           Right recvSzCInt -> if recvSzCInt /= 0
             then do
               let recvSz = csizeToInt recvSzCInt
-              -- This only works because of a guarantee that epoll makes in
-              -- the man page in FAQ question 9.
-              when (recvSz < maxLen) $ do
-                EM.unready token tv
-              receiveLoop intr conn tv (Buffer.advance buf recvSz) (minLen - recvSz) (total + recvSz)
+              -- This unready only works because of a guarantee that epoll
+              -- makes in the man page in FAQ question 9.
+              when (recvSz < maxLen) (EM.unready token tv)
+              receiveLoop intr conn tv
+                (Buffer.advance buf recvSz) (minLen - recvSz) (total + recvSz)
             else pure (Left ReceiveShutdown)
 
 csizeToInt :: CSize -> Int

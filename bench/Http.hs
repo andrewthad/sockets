@@ -7,6 +7,7 @@
 module Main where
 
 import Control.Exception
+import Data.Bytes.Types (Bytes(..),MutableBytes(..))
 import Data.Char (ord)
 import Data.Primitive
 import Data.Word
@@ -21,6 +22,8 @@ import qualified Data.Primitive as PM
 import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
 import qualified Socket.Stream.IPv4 as S
+import qualified Socket.Stream.Uninterruptible.MutableBytes as Mutable
+import qualified Socket.Stream.Uninterruptible.Bytes as Immutable
 
 main :: IO ()
 main = do
@@ -41,8 +44,8 @@ main = do
   either throwIO throwIO err
 
 echoStage1 :: Connection -> MutableByteArray RealWorld -> IO ()
-echoStage1 !sock !buffer = do
-  S.receiveBetweenMutableByteArraySlice sock 4 bufSize buffer 0 >>= \case
+echoStage1 !conn !buffer = do
+  Mutable.receiveBetween conn (MutableBytes buffer 0 bufSize) 4 >>= \case
     Left err -> case err of
       -- A shutdown right here is expected for http client's that do not
       -- reuse connections.
@@ -51,7 +54,7 @@ echoStage1 !sock !buffer = do
       -- instead of shutting them down gracefully.
       S.ReceiveReset -> pure ()
       -- _ -> BC.hPutStrLn stderr (BC.pack (show err))
-    Right n -> echoStage2 sock buffer n
+    Right n -> echoStage2 conn buffer n
 
 -- precondition: total >= 4
 echoStage2 :: Connection -> MutableByteArray RealWorld -> Int -> IO ()
@@ -61,16 +64,19 @@ echoStage2 !sock !buffer !total = do
   (w2 :: Word8) <- PM.readByteArray buffer (total - 3)
   (w1 :: Word8) <- PM.readByteArray buffer (total - 4)
   if w1 == 13 && w2 == 10 && w3 == 13 && w4 == 10
-    then S.sendByteArray sock httpResponse >>= \case
+    then Immutable.send sock (unsliced httpResponse) >>= \case
       Left err -> BC.hPutStrLn stderr (BC.pack (show err))
       Right _ -> echoStage1 sock buffer
     else do
       let remaining = bufSize - total
       if remaining > 0
-        then S.receiveBoundedMutableByteArraySlice sock remaining buffer 0 >>= \case
+        then Mutable.receiveOnce sock (MutableBytes buffer 0 remaining) >>= \case
           Left err -> BC.hPutStrLn stderr (BC.pack (show err))
           Right n -> echoStage2 sock buffer (total + n)
         else BC.hPutStrLn stderr "Buffer exhausted"
+
+unsliced :: ByteArray -> Bytes
+unsliced arr = Bytes arr 0 (PM.sizeofByteArray arr)
 
 httpResponse :: ByteArray
 httpResponse = E.fromList $ map (fromIntegral . ord)
