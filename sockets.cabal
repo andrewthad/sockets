@@ -104,7 +104,7 @@ library sockets-internal
     hs-source-dirs: src-noerr
   hs-source-dirs: src-internal
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
 library sockets-stream
   build-depends:
@@ -117,7 +117,7 @@ library sockets-stream
     Stream.Buffer
   hs-source-dirs: src-stream
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
 library sockets-stream-send
   build-depends:
@@ -132,7 +132,7 @@ library sockets-stream-send
     Stream.Send
   hs-source-dirs: src-stream-send
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
 library sockets-stream-receive
   build-depends:
@@ -147,17 +147,20 @@ library sockets-stream-receive
     Stream.Receive
   hs-source-dirs: src-stream-receive
   default-language: Haskell2010
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
 library
   exposed-modules:
     Socket.Datagram.IPv4.Spoof
     Socket.Datagram.IPv4.Undestined
     Socket.Stream.IPv4
+    Socket.Stream.Interruptible.Addr
     Socket.Stream.Interruptible.ByteString
     Socket.Stream.Interruptible.Bytes
-    Socket.Stream.Interruptible.Addr
     Socket.Stream.Interruptible.MutableBytes
+    Socket.Stream.Uninterruptible.Addr
+    Socket.Stream.Uninterruptible.ByteString
+    Socket.Stream.Uninterruptible.Bytes
     Socket.Stream.Uninterruptible.MutableBytes
   other-modules:
     Socket.Datagram
@@ -169,6 +172,12 @@ library
       requires
       (Stream.Send as Socket.Stream.Bytes,
        Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.Bytes),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Bytes.Send)
+      requires
+      (Stream.Send as Socket.Stream.Bytes,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
        Stream.Buffer as Socket.Stream.Bytes),
     sockets-stream-send
       (Stream.Send.Indefinite as Socket.Stream.Interruptible.MutableBytes.Send)
@@ -195,6 +204,18 @@ library
        Stream.Interrupt as Socket.Stream.Uninterruptible,
        Stream.Buffer as Socket.Stream.MutableBytes),
     sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Addr.Send)
+      requires
+      (Stream.Send as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.Addr),
+    sockets-stream-receive
+      (Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.Addr.Receive)
+      requires
+      (Stream.Receive as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.Addr),
+    sockets-stream-send
       (Stream.Send.Indefinite as Socket.Stream.Interruptible.Addr.Send)
       requires
       (Stream.Send as Socket.Stream.Addr,
@@ -207,19 +228,19 @@ library
        Stream.Interrupt as Socket.Stream.Interruptible,
        Stream.Buffer as Socket.Stream.Addr)
   build-depends:
-    , base >= 4.11.1.0 && < 5
+    , base >= 4.11.1.0 && <5
     , byteslice >=0.1 && <0.2
-    , bytestring >= 0.10 && < 0.11
-    , error-codes >= 0.1 && < 0.2
-    , ip >= 1.4.1
-    , posix-api >= 0.2.1
-    , primitive >= 0.6.4
+    , bytestring >=0.10 && <0.11
+    , error-codes >=0.1 && <0.2
+    , ip >=1.4.1
+    , posix-api >=0.2.1
+    , primitive >=0.6.4
     , primitive-atomic
     , sockets-stream-send
     , sockets-stream-receive
     , sockets-internal
-    , stm >= 2.4
-    , text >= 1.2
+    , stm >=2.4
+    , text >=1.2
   hs-source-dirs: src
   if flag(mmsg)
     hs-source-dirs: src-mmsg

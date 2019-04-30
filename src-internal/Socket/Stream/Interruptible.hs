@@ -1,7 +1,8 @@
 {-# language DataKinds #-}
 
 module Socket.Stream.Interruptible
-  ( Interrupt
+  ( InterruptRep
+  , Interrupt
   , Intr
   , wait
   , tokenToSendException
@@ -13,8 +14,10 @@ import Socket.Stream (SendException(SendInterrupted))
 import Socket.Stream (ReceiveException(ReceiveInterrupted))
 import Socket.EventManager (Token)
 import Control.Concurrent.STM (TVar)
+import GHC.Exts (RuntimeRep(LiftedRep))
 import qualified Socket.EventManager as EM
 
+type InterruptRep = 'LiftedRep
 type Interrupt = TVar Bool
 type Intr = 'Interruptible
 

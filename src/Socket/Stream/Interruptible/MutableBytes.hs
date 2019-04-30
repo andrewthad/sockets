@@ -4,7 +4,7 @@
 module Socket.Stream.Interruptible.MutableBytes
   ( send
   , receiveExactly
-  , receiveChunk
+  , receiveOnce
   , receiveBetween
   ) where
 
@@ -43,14 +43,14 @@ receiveExactly = Receive.receiveExactly
 -- | Receive a number of bytes exactly equal to the length of the slice. This
 -- only makes multiple calls to POSIX @recv@ if EAGAIN is returned. It makes at
 -- most one @recv@ call that successfully fills the buffer.
-receiveChunk ::
+receiveOnce ::
      TVar Bool 
      -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
   -> Connection -- ^ Connection
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (ReceiveException 'Interruptible) Int)
-{-# inline receiveChunk #-}
-receiveChunk = Receive.receiveChunk
+{-# inline receiveOnce #-}
+receiveOnce = Receive.receiveOnce
 
 -- | Receive a number of bytes that is at least the minimum size
 --   and is at most the length of the slice. If needed, this may

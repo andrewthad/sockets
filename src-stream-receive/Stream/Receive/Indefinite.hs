@@ -4,7 +4,7 @@
 
 module Stream.Receive.Indefinite
   ( receiveExactly
-  , receiveChunk
+  , receiveOnce
   , receiveBetween
   ) where
 
@@ -40,8 +40,8 @@ receiveExactly !intr (Connection !conn) !buf = do
 -- Receive a chunk of data from the socket. This may make multiple calls
 -- to POSIX @recv@ if EAGAIN is returned. It makes at most one call that
 -- successfully fills the buffer.
-receiveChunk :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) Int)
-receiveChunk !intr (Connection !conn) !buf = do
+receiveOnce :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) Int)
+receiveOnce !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.writer mngr conn
   receiveLoop intr conn tv buf 1 0

@@ -4,7 +4,7 @@
 module Socket.Stream.Interruptible.Addr
   ( send
   , receiveExactly
-  , receiveChunk
+  , receiveOnce
   , receiveBetween
   ) where
 
@@ -47,16 +47,16 @@ receiveExactly !tv !conn !addr !len =
 -- | Receive at most the specified number of bytes. This
 -- only makes multiple calls to POSIX @recv@ if EAGAIN is returned. It makes at
 -- most one @recv@ call that successfully fills the buffer.
-receiveChunk ::
+receiveOnce ::
      TVar Bool 
      -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
   -> Connection -- ^ Connection
   -> Addr -- ^ Start of buffer
   -> Int -- ^ Maximum number of bytes to receive
   -> IO (Either (ReceiveException 'Interruptible) Int)
-{-# inline receiveChunk #-}
-receiveChunk tv conn addr len =
-  Receive.receiveChunk tv conn (AddrLength addr len)
+{-# inline receiveOnce #-}
+receiveOnce tv conn addr len =
+  Receive.receiveOnce tv conn (AddrLength addr len)
 
 -- | Receive a number of bytes that is between the inclusive lower and
 --   upper bounds. If needed, this may call @recv@ repeatedly until the
