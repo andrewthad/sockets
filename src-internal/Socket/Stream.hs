@@ -5,20 +5,27 @@
 {-# language KindSignatures #-}
 {-# language StandaloneDeriving #-}
 module Socket.Stream
-  ( SendException(..)
+  ( -- * Exceptions
+    SendException(..)
   , ReceiveException(..)
   , ConnectException(..)
   , SocketException(..)
   , AcceptException(..)
   , CloseException(..)
+    -- * Connection
+  , Connection(..)
   ) where
 
 import Socket (Direction(..),Interruptibility(..),Forkedness(..))
 import Socket.IPv4 (SocketException(..))
+import System.Posix.Types (Fd)
 
 import Data.Kind (Type)
 import Data.Typeable (Typeable)
 import Control.Exception (Exception)
+
+-- | A connection-oriented stream socket.
+newtype Connection = Connection Fd
 
 -- | Recoverable exceptions that can occur while connecting to a peer.
 -- This includes both failures while opening the socket and failures

@@ -92,6 +92,7 @@ import Socket.Debug (debug)
 import Socket.IPv4 (Endpoint(..),describeEndpoint)
 import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
 import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
+import Socket.Stream (Connection(..))
 import System.Posix.Types(Fd)
 
 import qualified Control.Concurrent.STM as STM
@@ -110,9 +111,6 @@ import qualified GHC.ForeignPtr as FP
 
 -- | A socket that listens for incomming connections.
 newtype Listener = Listener Fd
-
--- | A connection-oriented stream socket.
-newtype Connection = Connection Fd
 
 -- | Open a socket that can be used to listen for inbound connections.
 -- Requirements:
