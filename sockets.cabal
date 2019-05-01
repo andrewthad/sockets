@@ -71,32 +71,29 @@ flag example
   description: Build example executables
   default: False
 
-library
-  exposed-modules:
-    Socket.Datagram.IPv4.Undestined
-    Socket.Datagram.IPv4.Spoof
-    Socket.Stream.IPv4
-  other-modules:
-    Socket.EventManager
-    Socket.Stream
-    Socket.Datagram
-    Socket.Datagram.IPv4.Undestined.Multiple
-    Socket.Datagram.IPv4.Undestined.Internal
-    Socket.Debug
-    Socket.Error
-    Socket.IPv4
-    Socket
+library sockets-internal
   build-depends:
-    , base >= 4.11.1.0 && < 5
-    , bytestring >= 0.10 && < 0.11
-    , error-codes >= 0.1 && < 0.2
+    , base >= 4.11.1.0 && <5
     , ip >= 1.4.1
     , posix-api >= 0.2.1
     , primitive >= 0.6.4
-    , primitive-atomic
+    , primitive-atomic >= 0.1 && <0.2
     , stm >= 2.4
     , text >= 1.2
-  hs-source-dirs: src
+    , byteslice >=0.1 && <0.2
+  exposed-modules:
+    Socket
+    Socket.AddrLength
+    Socket.Debug
+    Socket.Error
+    Socket.EventManager
+    Socket.IPv4
+    Socket.Stream
+    Socket.Stream.Addr
+    Socket.Stream.Bytes
+    Socket.Stream.MutableBytes
+    Socket.Stream.Interruptible
+    Socket.Stream.Uninterruptible
   if flag(debug)
     hs-source-dirs: src-debug
   else
@@ -105,6 +102,146 @@ library
     hs-source-dirs: src-err
   else
     hs-source-dirs: src-noerr
+  hs-source-dirs: src-internal
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-stream
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , sockets-internal
+  signatures:
+    Stream.Interrupt
+    Stream.Buffer
+  hs-source-dirs: src-stream
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-stream-send
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , sockets-internal
+    , sockets-stream
+  exposed-modules:
+    Stream.Send.Indefinite
+  signatures:
+    Stream.Send
+  hs-source-dirs: src-stream-send
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-stream-receive
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , sockets-internal
+    , sockets-stream
+  exposed-modules:
+    Stream.Receive.Indefinite
+  signatures:
+    Stream.Receive
+  hs-source-dirs: src-stream-receive
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library
+  exposed-modules:
+    Socket.Datagram.IPv4.Spoof
+    Socket.Datagram.IPv4.Undestined
+    Socket.Stream.IPv4
+    Socket.Stream.Interruptible.Addr
+    Socket.Stream.Interruptible.ByteString
+    Socket.Stream.Interruptible.Bytes
+    Socket.Stream.Interruptible.MutableBytes
+    Socket.Stream.Uninterruptible.Addr
+    Socket.Stream.Uninterruptible.ByteString
+    Socket.Stream.Uninterruptible.Bytes
+    Socket.Stream.Uninterruptible.MutableBytes
+  other-modules:
+    Socket.Datagram
+    Socket.Datagram.IPv4.Undestined.Multiple
+    Socket.Datagram.IPv4.Undestined.Internal
+  mixins:
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Interruptible.Bytes.Send)
+      requires
+      (Stream.Send as Socket.Stream.Bytes,
+       Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.Bytes),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Bytes.Send)
+      requires
+      (Stream.Send as Socket.Stream.Bytes,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.Bytes),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Interruptible.MutableBytes.Send)
+      requires
+      (Stream.Send as Socket.Stream.MutableBytes,
+       Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.MutableBytes),
+    sockets-stream-receive
+      (Stream.Receive.Indefinite as Socket.Stream.Interruptible.MutableBytes.Receive)
+      requires
+      (Stream.Receive as Socket.Stream.MutableBytes,
+       Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.MutableBytes),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Send)
+      requires
+      (Stream.Send as Socket.Stream.MutableBytes,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.MutableBytes),
+    sockets-stream-receive
+      (Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Receive)
+      requires
+      (Stream.Receive as Socket.Stream.MutableBytes,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.MutableBytes),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Addr.Send)
+      requires
+      (Stream.Send as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.Addr),
+    sockets-stream-receive
+      (Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.Addr.Receive)
+      requires
+      (Stream.Receive as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Uninterruptible,
+       Stream.Buffer as Socket.Stream.Addr),
+    sockets-stream-send
+      (Stream.Send.Indefinite as Socket.Stream.Interruptible.Addr.Send)
+      requires
+      (Stream.Send as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.Addr),
+    sockets-stream-receive
+      (Stream.Receive.Indefinite as Socket.Stream.Interruptible.Addr.Receive)
+      requires
+      (Stream.Receive as Socket.Stream.Addr,
+       Stream.Interrupt as Socket.Stream.Interruptible,
+       Stream.Buffer as Socket.Stream.Addr)
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , byteslice >=0.1 && <0.2
+    , bytestring >=0.10 && <0.11
+    , error-codes >=0.1 && <0.2
+    , ip >=1.4.1
+    , posix-api >=0.2.1
+    , primitive >=0.6.4
+    , primitive-atomic
+    , sockets-stream-send
+    , sockets-stream-receive
+    , sockets-internal
+    , stm >=2.4
+    , text >=1.2
+  hs-source-dirs: src
   if flag(mmsg)
     hs-source-dirs: src-mmsg
   else
@@ -125,6 +262,7 @@ test-suite test
     , primitive >= 0.6.4
     , async
     , bytestring
+    , byteslice
   ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
 
@@ -150,6 +288,7 @@ benchmark http
     , ip >= 1.4.1
     , primitive >= 0.6.4
     , bytestring >= 0.10.8.2
+    , byteslice >= 0.1
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench

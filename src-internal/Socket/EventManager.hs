@@ -28,6 +28,34 @@ module Socket.EventManager
   , isInterrupt
   ) where
 
+import Control.Applicative (liftA2,(<|>))
+import Control.Concurrent (getNumCapabilities,forkOn,rtsSupportsBoundThreads)
+import Control.Concurrent.STM (TVar)
+import Control.Monad (when)
+import Control.Monad.STM (atomically)
+import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
+import Data.Bits (testBit,unsafeShiftR)
+import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
+import Data.Primitive (Prim)
+import Data.Word (Word64,Word32)
+import Foreign.C.Error (Errno(..))
+import Foreign.C.Types (CInt)
+import GHC.Conc.Sync (yield)
+import GHC.Exts (RealWorld,Int(I#),(*#))
+import Numeric (showIntAtBase)
+import Socket.Error (die)
+import Socket.Debug (debug,whenDebugging,debugging)
+import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.Types (Fd)
+
+import qualified Control.Monad.STM as STM
+import qualified Control.Concurrent.STM as STM
+import qualified Linux.Epoll as Epoll
+import qualified Control.Monad.Primitive as PM
+import qualified Data.Primitive as PM
+import qualified Data.Primitive.Unlifted.Atomic as PM
+import qualified GHC.Exts as Exts
+
 -- Why write another event manager? GHC ships with the mio event manager,
 -- but mio is burdened with backwards-compatibility concerns that are
 -- antithetical to performance:
@@ -61,60 +89,9 @@ module Socket.EventManager
 -- @reader@ or @writer@ at any time to retrieve the @TVar Bool@ associated with
 -- that describes the readiness of that channel. Because of how edge-triggered
 -- event notification works, this TVar has some slightly unusual properties.
--- This is best illustrated by example:
--- 
--- TODO: This is now out of date and should probably be deleted.
--- > example :: MutableByteArray RealWorld -> IO ()
--- > example buf = do
--- >   register fd
--- >   readyVar <- reader fd
--- >   readTVarIO readyVar >>= \case
--- >     True -> do
--- >       numBytes <- uninterruptibleReceive fd buf 
--- >       -- No guarantee yet that there are bytes on the
--- >       -- receive buffer.
--- >       if numBytes == 0
--- >         then do
--- >           atomically $ do
--- >             x <- readTVar readyVar
--- >             if 
--- >           atomically (check =<< readTVar readyVar)
--- >         else ...
--- >     False -> do
--- >       -- Need to wait for more input
--- >       atomically (check =<< readTVar readyVar)
--- >       numBytes <- uninterruptibleReceive fd buf 
--- >       if numBytes == 0
--- >         then fail "Not possible"
--- >         else ...
+-- This is best illustrated by example. The example has been removed.
 
-import Control.Applicative (liftA2,(<|>))
-import Control.Concurrent (getNumCapabilities,forkOn,rtsSupportsBoundThreads)
-import Control.Concurrent.STM (TVar)
-import Control.Monad (when)
-import Control.Monad.STM (atomically)
-import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
-import Data.Bits (testBit,unsafeShiftR)
-import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
-import Data.Primitive (Prim)
-import Data.Word (Word64,Word32)
-import Foreign.C.Error (Errno(..))
-import Foreign.C.Types (CInt)
-import GHC.Conc.Sync (yield)
-import GHC.Exts (RealWorld,Int(I#),(*#))
-import Numeric (showIntAtBase)
-import Socket.Error (die)
-import Socket.Debug (debug,whenDebugging,debugging)
-import System.IO.Unsafe (unsafePerformIO)
-import System.Posix.Types (Fd)
 
-import qualified Control.Monad.STM as STM
-import qualified Control.Concurrent.STM as STM
-import qualified Linux.Epoll as Epoll
-import qualified Control.Monad.Primitive as PM
-import qualified Data.Primitive as PM
-import qualified Data.Primitive.Unlifted.Atomic as PM
-import qualified GHC.Exts as Exts
 
 -- | Register interest in reads and writes. After registering a socket,
 -- use 'reader' and 'writer' to get access to the transactional variables

@@ -1,0 +1,16 @@
+signature Stream.Buffer where
+
+import Prelude (Int)
+
+-- A buffer that needs to be either filled or consumed.
+-- Consumers of this API will call advance to move through
+-- the buffer until the length is 0. At that point, the
+-- buffer has been entirely filled or consumed.
+data Buffer
+
+-- Move forward in the buffer. Callers of this function
+-- are responsible for checking bounds.
+advance :: Buffer -> Int -> Buffer
+
+-- Length of the buffer.
+length :: Buffer -> Int
