@@ -1,4 +1,4 @@
-signature Stream.Buffer where
+signature Socket.Buffer where
 
 import Prelude (Int)
 

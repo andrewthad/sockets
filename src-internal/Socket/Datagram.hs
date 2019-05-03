@@ -42,3 +42,4 @@ data ReceiveException :: Interruptibility -> Type where
 
 deriving stock instance Show (ReceiveException i)
 deriving anyclass instance (Typeable i) => Exception (ReceiveException i)
+

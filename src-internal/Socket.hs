@@ -10,6 +10,8 @@ module Socket
   ( SocketException(..)
   , SocketUnrecoverableException(..)
   , Direction(..)
+  , Connectedness(..)
+  , Family(..)
   , Interruptibility(..)
   , Forkedness(..)
   , cgetsockname 
@@ -35,6 +37,10 @@ import Foreign.C.Types (CInt)
 import qualified Data.List as L
 
 data Direction = Send | Receive
+
+data Connectedness = Connected | Unconnected
+
+data Family = IPv4 | IPv6 | Unix
 
 data Interruptibility = Interruptible | Uninterruptible
 

@@ -1,4 +1,4 @@
-module Socket.Stream.Bytes
+module Socket.Bytes
   ( Buffer
   , advance
   , length
@@ -26,11 +26,6 @@ length :: Bytes -> Int
 {-# inline length #-}
 length (Bytes _ _ len) = len
 
-sendOnce :: Fd -> Bytes -> IO (Either Errno CSize)
-{-# inline sendOnce #-}
-sendOnce fd (Bytes arr off len) =
-  uninterruptibleSendByteArray fd arr (intToCInt off) (intToCSize len) noSignal
-
 intToCInt :: Int -> CInt
 {-# inline intToCInt #-}
 intToCInt = fromIntegral
@@ -38,4 +33,9 @@ intToCInt = fromIntegral
 intToCSize :: Int -> CSize
 {-# inline intToCSize #-}
 intToCSize = fromIntegral
+
+sendOnce :: Fd -> Bytes -> IO (Either Errno CSize)
+{-# inline sendOnce #-}
+sendOnce fd (Bytes arr off len) =
+  uninterruptibleSendByteArray fd arr (intToCInt off) (intToCSize len) noSignal
 

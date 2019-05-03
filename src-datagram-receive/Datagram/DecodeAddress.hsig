@@ -1,0 +1,13 @@
+signature Datagram.DecodeAddress where 
+
+import Prelude (IO)
+import Posix.Socket (SocketAddress)
+import Foreign.C.Types (CInt)
+
+data Peer
+
+maxAddressSize :: CInt
+
+-- This is allowed to throw an exception if decoding
+-- the address fails.
+decodeAddress :: CInt -> SocketAddress -> IO Peer

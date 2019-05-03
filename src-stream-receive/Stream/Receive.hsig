@@ -1,6 +1,6 @@
 signature Stream.Receive where
 
-import Stream.Buffer (Buffer)
+import Socket.Buffer (Buffer)
 
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CSize)

@@ -1,6 +1,6 @@
 signature Stream.Send where
 
-import Stream.Buffer (Buffer)
+import Socket.Buffer (Buffer)
 
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CSize)
@@ -9,4 +9,3 @@ import System.Posix.Types (Fd)
 
 -- Make a single POSIX @send@ call with the unsafe FFI.
 sendOnce :: Fd -> Buffer -> IO (Either Errno CSize)
-
