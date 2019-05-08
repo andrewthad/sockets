@@ -39,10 +39,7 @@ receiveMany ::
   -> Int -- ^ Maximum number of datagrams to receive
   -> Int -- ^ Maximum size of each datagram to receive
   -> IO (Either SocketException (Array Message))
-receiveMany = receiveManyNative
-
-receiveManyNative :: Socket -> Int -> Int -> IO (Either SocketException (Array Message))
-receiveManyNative (Socket !fd) !maxDatagrams !maxSz = do
+receiveMany (Socket !fd) !maxDatagrams !maxSz = do
   threadWaitRead fd
   L.uninterruptibleReceiveMultipleMessageB fd S.sizeofSocketAddressInternet (intToCSize maxSz) (intToCUInt maxDatagrams) L.truncate >>= \case
     Left err -> pure (Left (errorCode err))

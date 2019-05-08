@@ -27,7 +27,8 @@ import qualified Data.Primitive.MVar as PM
 import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
 import qualified Socket.Datagram.IPv4.Spoof as DIS
-import qualified Socket.Datagram.IPv4.Undestined as DIU
+import qualified Socket.Datagram.IPv4.Unconnected as DIU
+import qualified Socket.Datagram.Uninterruptible.Bytes as DUB
 import qualified Socket.Stream.IPv4 as SI
 import qualified Socket.Stream.Uninterruptible.Bytes as UB
 import qualified Socket.Stream.Uninterruptible.MutableBytes as UMB
@@ -99,48 +100,50 @@ testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   (port,received) <- concurrently (sender m) (receiver m)
-  received @=? DIU.Message (DIU.Endpoint IPv4.loopback port) message
+  received @=? DIU.Message (DIU.Peer IPv4.loopback port) message
   where
   message = E.fromList [0,1,2,3] :: ByteArray
   sz = PM.sizeofByteArray message
   sender :: PM.MVar RealWorld Word16 -> IO Word16
-  sender m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
+  sender m = unhandled $ DIU.withSocket (DUB.Peer IPv4.loopback 0) $ \sock srcPort -> do
     dstPort <- PM.takeMVar m
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message 0 sz
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message)
     pure srcPort
   receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
-  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    unhandled $ DIU.receiveByteArray sock sz
+    unhandled $ DUB.receiveFromIPv4 sock sz
 
 testDatagramUndestinedB :: Assertion
 testDatagramUndestinedB = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
   (port,received) <- concurrently (sender m n) (receiver m n)
-  received @=?
-    ( DIU.Message (DIU.Endpoint IPv4.loopback port) message1
-    , DIU.Message (DIU.Endpoint IPv4.loopback port) message2
-    )
+  let expected = 
+        ( DIU.Message (DIU.Peer IPv4.loopback port) message1
+        , DIU.Message (DIU.Peer IPv4.loopback port) message2
+        )
+  expected @=? received
   where
   message1 = E.fromList [0,1,2,3] :: ByteArray
-  message2 = E.fromList [4,5,6,8,9,10] :: ByteArray
+  message2 = E.fromList [4,5,6,7,8,9,10] :: ByteArray
   sz1 = PM.sizeofByteArray message1
   sz2 = PM.sizeofByteArray message2
   sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
-  sender m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
+  sender m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock srcPort -> do
     dstPort <- PM.takeMVar m
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message1 0 sz1
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message2 0 sz2
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
     PM.putMVar n ()
     pure srcPort
   receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message)
-  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    msgs <- unhandled $ DIU.receiveMany sock 3 (max sz1 sz2)
-    if PM.sizeofArray msgs == 2
-      then pure (PM.indexArray msgs 0, PM.indexArray msgs 1)
+    slab <- DUB.newSlabIPv4 2 (max sz1 sz2)
+    msgs <- unhandled $ DUB.receiveManyFromIPv4 sock slab
+    if PM.sizeofSmallArray msgs == 2
+      then pure (PM.indexSmallArray msgs 0, PM.indexSmallArray msgs 1)
       else fail "received a number of messages other than 2"
       
 testDatagramUndestinedC :: Assertion
@@ -148,37 +151,39 @@ testDatagramUndestinedC = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
   (port,received) <- concurrently (sender m n) (receiver m n)
-  received @=?
-    ( DIU.Message (DIU.Endpoint IPv4.loopback port) message1
-    , DIU.Message (DIU.Endpoint IPv4.loopback port) message2
-    , DIU.Message (DIU.Endpoint IPv4.loopback port) message3
-    )
+  let expected = 
+        ( DIU.Message (DIU.Peer IPv4.loopback port) message1
+        , DIU.Message (DIU.Peer IPv4.loopback port) message2
+        , DIU.Message (DIU.Peer IPv4.loopback port) message3
+        )
+  expected @=? received
   where
   message1 = E.fromList (enumFromTo 0 9):: ByteArray
-  message2 = E.fromList (enumFromTo 10 10) :: ByteArray
-  message3 = E.fromList (enumFromTo 11 25) :: ByteArray
+  message2 = E.fromList (enumFromTo 10 12) :: ByteArray
+  message3 = E.fromList (enumFromTo 13 27) :: ByteArray
   sz1 = PM.sizeofByteArray message1
   sz2 = PM.sizeofByteArray message2
   sz3 = PM.sizeofByteArray message3
   sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
-  sender m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock srcPort -> do
+  sender m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock srcPort -> do
     dstPort <- PM.takeMVar m
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message1 0 sz1
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message2 0 sz2
-    unhandled $ DIU.send sock (DIU.Endpoint IPv4.loopback dstPort) message3 0 sz3
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message3)
     PM.putMVar n ()
     pure srcPort
   receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message,DIU.Message)
-  receiver m n = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    msgsX <- unhandled $ DIU.receiveMany sock 2 (max sz1 sz2)
-    (msg1,msg2) <- if PM.sizeofArray msgsX == 2
-      then pure (PM.indexArray msgsX 0, PM.indexArray msgsX 1)
+    slab <- DUB.newSlabIPv4 2 (max sz1 (max sz2 sz3))
+    msgsX <- unhandled $ DUB.receiveManyFromIPv4 sock slab
+    (msg1,msg2) <- if PM.sizeofSmallArray msgsX == 2
+      then pure (PM.indexSmallArray msgsX 0, PM.indexSmallArray msgsX 1)
       else fail "received a number of messages other than 2"
-    msgsY <- unhandled $ DIU.receiveMany sock 2 sz3
-    msg3 <- if PM.sizeofArray msgsY == 1
-      then pure (PM.indexArray msgsY 0)
+    msgsY <- unhandled $ DUB.receiveManyFromIPv4 sock slab
+    msg3 <- if PM.sizeofSmallArray msgsY == 1
+      then pure (PM.indexSmallArray msgsY 0)
       else fail "received a number of messages other than 2"
     pure (msg1,msg2,msg3)
       
@@ -205,11 +210,11 @@ testStreamA = do
   sender :: PM.MVar RealWorld Word16 -> IO ()
   sender m = do
     dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
       unhandled $ UB.send conn (unsliced szb)
       unhandled $ UB.send conn (unsliced message)
   receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
-  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       serializedSize <- unhandled $ UB.receiveExactly conn (PM.sizeOf (undefined :: Int))
@@ -227,10 +232,10 @@ testStreamC = do
   sender :: PM.MVar RealWorld Word16 -> IO ()
   sender m = do
     dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
       unhandled $ UBS.send conn message
   receiver :: PM.MVar RealWorld Word16 -> IO ByteString
-  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       unhandled $ UBS.receiveExactly conn (B.length message)
@@ -252,7 +257,7 @@ testStreamD = do
     counter <- PM.newEmptyMVar
     replicateM_ simultaneousClients $ forkIO $ do
       replicateM_ (div totalConns simultaneousClients) $ do
-        _ <- unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+        _ <- unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
           let go = UB.send conn (unsliced message) >>= \case
                 Left SI.SendShutdown -> pure ()
                 Left e -> throwIO e
@@ -262,7 +267,7 @@ testStreamD = do
       PM.putMVar counter ()
     replicateM_ simultaneousClients $ PM.takeMVar counter
   server :: PM.MVar RealWorld Word16 -> IO ()
-  server m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+  server m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     counter <- PM.newEmptyMVar
     replicateM_ totalConns $ do
@@ -293,10 +298,10 @@ testStreamB megabytes = do
   sender :: PM.MVar RealWorld Word16 -> IO ()
   sender m = do
     dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
       replicateM_ (32 * megabytes) $ unhandled $ UB.send conn (unsliced message)
   receiver :: PM.MVar RealWorld Word16 -> IO ()
-  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       buffer <- PM.newByteArray chunkSize
@@ -332,7 +337,7 @@ testDatagramSpoofA = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   ((),received) <- concurrently (sender m) (receiver m)
   received @=? DIU.Message
-    (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+    (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
     payload
   where
   sz = 16
@@ -343,13 +348,13 @@ testDatagramSpoofA = do
     marr <- PM.newByteArray sz
     PM.copyByteArray marr 0 payload 0 sz
     unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
-      (DIU.Endpoint IPv4.loopback dstPort)
+      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
+      (DIU.Peer IPv4.loopback dstPort)
       marr 0 sz
   receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
-  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    unhandled $ DIU.receiveByteArray sock 500
+    unhandled $ DUB.receiveFromIPv4 sock 500
       
 -- Here, the sender spoofs its ip address and port twice, picking a
 -- different port each time.
@@ -359,10 +364,10 @@ testDatagramSpoofB = do
   ((),received) <- concurrently (sender m) (receiver m)
   received @=?
     ( DIU.Message
-      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
+      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
       payloadA
     , DIU.Message
-      (DIU.Endpoint (IPv4.fromOctets 9 8 7 6) 59999)
+      (DIU.Peer (IPv4.fromOctets 9 8 7 6) 59999)
       payloadB
     )
   where
@@ -377,18 +382,18 @@ testDatagramSpoofB = do
     PM.copyByteArray marrA 0 payloadA 0 sz
     PM.copyByteArray marrB 0 payloadB 0 sz
     unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Endpoint (IPv4.fromOctets 8 7 6 5) 60000)
-      (DIU.Endpoint IPv4.loopback dstPort)
+      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
+      (DIU.Peer IPv4.loopback dstPort)
       marrA 0 sz
     unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Endpoint (IPv4.fromOctets 9 8 7 6) 59999)
-      (DIU.Endpoint IPv4.loopback dstPort)
+      (DIU.Peer (IPv4.fromOctets 9 8 7 6) 59999)
+      (DIU.Peer IPv4.loopback dstPort)
       marrB 0 sz
   receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Message,DIU.Message)
-  receiver m = unhandled $ DIU.withSocket (DIU.Endpoint IPv4.loopback 0) $ \sock port -> do
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    msg1 <- unhandled $ DIU.receiveByteArray sock 500
-    msg2 <- unhandled $ DIU.receiveByteArray sock 500
+    msg1 <- unhandled $ DUB.receiveFromIPv4 sock 500
+    msg2 <- unhandled $ DUB.receiveFromIPv4 sock 500
     return (msg1,msg2)
 
 testStreamE :: Assertion
@@ -404,13 +409,13 @@ testStreamE = do
   sender :: PM.MVar RealWorld Word16 -> IO ()
   sender m = do
     dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Endpoint IPv4.loopback dstPort) unhandledClose $ \conn -> do
+    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
       unhandled $ UB.send conn (unsliced messageA)
       unhandled $ UB.send conn (unsliced messageB)
       unhandled $ UB.send conn (unsliced messageC)
       unhandled $ UB.send conn (unsliced messageD)
   receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
-  receiver m = unhandled $ SI.withListener (SI.Endpoint IPv4.loopback 0) $ \listener port -> do
+  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
     PM.putMVar m port
     unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
       marr <- PM.newByteArray 256

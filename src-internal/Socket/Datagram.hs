@@ -5,13 +5,15 @@
 {-# language KindSignatures #-}
 {-# language StandaloneDeriving #-}
 module Socket.Datagram
-  ( SendException(..)
+  ( Socket(..)
+  , SendException(..)
   , ReceiveException(..)
   , SocketException(..)
   ) where
 
-import Socket (Interruptibility(..))
+import Socket (Interruptibility(..),Connectedness,Family)
 import Socket.IPv4 (SocketException(..))
+import System.Posix.Types (Fd)
 
 import Data.Kind (Type)
 import Data.Typeable (Typeable)
@@ -43,3 +45,12 @@ data ReceiveException :: Interruptibility -> Type where
 deriving stock instance Show (ReceiveException i)
 deriving anyclass instance (Typeable i) => Exception (ReceiveException i)
 
+-- | A datagram socket. The 'Connectedness' refers to whether or
+-- not POSIX @connect@ has been applied to the socket. A connected
+-- socket socket uses POSIX @send@/@recv@ to communicate with a
+-- single peer. An unconnected socket uses POSIX @sendto@/@recvfrom@
+-- to communicate with many peer. The 'Family' refers to whether this
+-- socket uses IPv4, IPv6, or Unix (local).
+newtype Socket :: Connectedness -> Family -> Type where
+  Socket :: Fd -> Socket c a
+  deriving (Eq,Ord,Show)

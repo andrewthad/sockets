@@ -18,7 +18,7 @@
 module Socket.Datagram.IPv4.Spoof
   ( -- * Types
     Socket(..)
-  , Endpoint(..)
+  , Peer(..)
   , Message(..)
     -- * Establish
   , withSocket
@@ -42,9 +42,8 @@ import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (SocketUnrecoverableException(..),Interruptibility(..))
 import Socket.Datagram (SendException(..))
-import Socket.Datagram.IPv4.Undestined.Internal (Message(..))
 import Socket.Debug (debug,whenDebugging)
-import Socket.IPv4 (Endpoint(..))
+import Socket.IPv4 (Peer(..),Message(..))
 import System.Posix.Types (Fd)
 import Text.Printf (printf)
 
@@ -106,8 +105,8 @@ withSocket f = mask $ \restore -> do
 -- | Send a slice of a bytearray to the specified endpoint.
 sendMutableByteArray ::
      Socket -- ^ Socket
-  -> Endpoint -- ^ Spoofed source address and port
-  -> Endpoint -- ^ Remote IPv4 address and port
+  -> Peer -- ^ Spoofed source address and port
+  -> Peer -- ^ Remote IPv4 address and port
   -> MutableByteArray RealWorld -- ^ Buffer (will be sliced)
   -> Int -- ^ Offset into payload
   -> Int -- ^ Lenth of slice into buffer
@@ -221,8 +220,8 @@ udpChecksum src dst payload off len = do
   -- fill the bits beyond 48.
   pure (word64ToWord16 (complement ((r .&. 0xFFFF) + (unsafeShiftR r 16 .&. 0xFFFF) + (unsafeShiftR r 32))))
 
-endpointToSocketAddressInternet :: Endpoint -> S.SocketAddressInternet
-endpointToSocketAddressInternet (Endpoint {address, port}) = S.SocketAddressInternet
+endpointToSocketAddressInternet :: Peer -> S.SocketAddressInternet
+endpointToSocketAddressInternet (Peer {address, port}) = S.SocketAddressInternet
   { port = S.hostToNetworkShort port
   , address = S.hostToNetworkLong (getIPv4 address)
   }

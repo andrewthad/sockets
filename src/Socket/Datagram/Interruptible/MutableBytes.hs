@@ -5,10 +5,15 @@
 {-# language DataKinds #-}
 
 module Socket.Datagram.Interruptible.MutableBytes
-  ( send
-  , receive
+  ( -- * Send
+    send
   , sendToIPv4
+    -- * Receive
+  , receive
   , receiveFromIPv4
+    -- * Receive Many
+  , MM.receiveMany
+  , MM.receiveManyFromIPv4
   ) where
 
 import Data.Bytes.Types (MutableBytes)
@@ -17,15 +22,13 @@ import Control.Concurrent.STM (TVar)
 import Data.Kind (Type)
 import GHC.Exts (RealWorld)
 import System.Posix.Types (Fd)
-import Socket.IPv4 (Endpoint)
-import Socket.Datagram (SendException,ReceiveException)
+import Socket.IPv4 (Peer,Receipt)
+import Socket.Datagram (Socket(..),SendException,ReceiveException)
+import qualified Socket.Datagram.Interruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Connected as CR
 import qualified Socket.Datagram.Interruptible.MutableBytes.Send.Connected as CS
 import qualified Socket.Datagram.Interruptible.MutableBytes.Send.IPv4 as V4S
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.IPv4 as V4R
-
-newtype Socket :: Connectedness -> Family -> Type where
-  Socket :: Fd -> Socket c a
 
 -- | Send a datagram using a socket with a pre-designated peer. This refers
 -- to a datagram socket for which POSIX @connect@ has locked down communication
@@ -33,7 +36,7 @@ newtype Socket :: Connectedness -> Family -> Type where
 send ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return @'Left' 'SendInterrupted'@.
-  -> Socket 'Connected a -- ^ Socket with designated endpoint
+  -> Socket 'Connected a -- ^ Socket with designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (SendException 'Interruptible) ())
 send !intr (Socket !sock) !buf =
@@ -50,14 +53,14 @@ receive ::
   -> IO (Either (ReceiveException 'Interruptible) Int)
 receive !intr (Socket !sock) !buf =
   CR.receive intr sock buf >>= \case
-    Right ((),sz) -> pure (Right sz)
+    Right sz -> pure (Right sz)
     Left err -> pure (Left err)
 
 sendToIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return @'Left' 'SendInterrupted'@.
-  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated endpoint
-  -> Endpoint -- ^ Destination
+  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+  -> Peer -- ^ Destination
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (SendException 'Interruptible) ())
 sendToIPv4 !intr (Socket !sock) !dst !buf =
@@ -66,9 +69,9 @@ sendToIPv4 !intr (Socket !sock) !dst !buf =
 receiveFromIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated endpoint
+  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
-  -> IO (Either (ReceiveException 'Interruptible) (Endpoint,Int))
+  -> IO (Either (ReceiveException 'Interruptible) Receipt)
 receiveFromIPv4 !intr (Socket !sock) !buf =
   V4R.receive intr sock buf
 

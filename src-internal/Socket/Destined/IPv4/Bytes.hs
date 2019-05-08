@@ -2,7 +2,7 @@
 {-# language DataKinds #-}
 {-# language NamedFieldPuns #-}
 
-module Socket.Destined.IPv4.MutableBytes
+module Socket.Destined.IPv4.Bytes
   ( Buffer
   , Peer
   , advance
@@ -12,22 +12,22 @@ module Socket.Destined.IPv4.MutableBytes
 
 import Prelude hiding (length)
 
-import Data.Bytes.Types (MutableBytes(..))
+import Data.Bytes.Types (Bytes(..))
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (RealWorld)
 import Net.Types (IPv4(..))
 import Posix.Socket (MessageFlags,Message(Receive))
 import Socket.IPv4 (Peer(..))
-import Socket.MutableBytes (advance,length)
+import Socket.Bytes (advance,length)
 import System.Posix.Types (Fd)
 import qualified Posix.Socket as S
 
-type Buffer = MutableBytes RealWorld
+type Buffer = Bytes
 
 send :: Peer -> Fd -> Buffer -> IO (Either Errno CSize)
-send !dst !sock (MutableBytes arr off len) =
-  S.uninterruptibleSendToInternetMutableByteArray sock arr
+send !dst !sock (Bytes arr off len) =
+  S.uninterruptibleSendToInternetByteArray sock arr
     (intToCInt off)
     (intToCSize len)
     mempty

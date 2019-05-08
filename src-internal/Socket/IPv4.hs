@@ -9,31 +9,86 @@
 {-# language StandaloneDeriving #-}
 
 module Socket.IPv4
-  ( Endpoint(..)
+  ( Peer(..)
+  , Message(..)
+  , Receipt(..)
+  , Slab(..)
   , SocketException(..)
   , describeEndpoint
+  , freezeSlab
+  , newSlabIPv4
   ) where
 
 import Control.Exception (Exception)
 import Data.Kind (Type)
 import Data.Word (Word16)
 import Net.Types (IPv4(..))
+import Data.Primitive (ByteArray(..),MutableByteArray,MutableUnliftedArray)
+import Data.Primitive (SmallArray,SmallMutableArray)
+import Data.Primitive (MutablePrimArray)
+import Foreign.C.Types (CInt)
+import GHC.Exts (RealWorld)
+import Socket.Error (die)
 
+import qualified Data.Primitive as PM
+import qualified Posix.Socket as S
 import qualified Data.Text as T
 import qualified Net.IPv4 as IPv4
 
--- | An endpoint for an IPv4 socket, connection, or listener.
+-- | An peer for an IPv4 socket, connection, or listener.
 --   Everything is in host byte order, and the user is not
---   responisble for performing any conversions.
-data Endpoint = Endpoint
+--   responsible for performing any conversions.
+data Peer = Peer
   { address :: !IPv4
   , port :: !Word16
   } deriving stock (Eq,Show)
 
+data Message = Message
+  { peer :: {-# UNPACK #-} !Peer
+  , payload :: !ByteArray
+  } deriving stock (Eq,Show)
+
+data Receipt = Receipt
+  { peer :: {-# UNPACK #-} !Peer
+  , size :: !Int
+  } deriving stock (Eq,Show)
+
+-- | A slab of memory for bulk datagram ingest (via @recvmmsg@). This
+-- approach cuts down on allocations. Slabs are not safe for concurrent
+-- access. Do not share a slab across multiple threads.
+data Slab = Slab
+  { sizes :: !(MutablePrimArray RealWorld CInt)
+    -- ^ Buffer for returned datagram lengths
+  , peers :: !(MutablePrimArray RealWorld S.SocketAddressInternet)
+    -- ^ Buffer for returned addresses
+  , payloads :: !(MutableUnliftedArray RealWorld (MutableByteArray RealWorld))
+    -- ^ Buffers for datagram payloads, no slicing
+  }
+
+-- | Allocate a slab that is used to receive multiple datagrams at
+-- the same time.
+newSlabIPv4 ::
+     Int -- ^ maximum datagrams
+  -> Int -- ^ maximum size of individual datagram 
+  -> IO Slab
+newSlabIPv4 !n !m = if n >= 1 && m >= 1
+  then do
+    sizes <- PM.newPrimArray n
+    peers <- PM.newPrimArray n
+    payloads <- PM.unsafeNewUnliftedArray n
+    let go !ix = if ix > (-1)
+          then do
+            PM.writeUnliftedArray payloads ix =<< PM.newByteArray m
+            go (ix - 1)
+          else pure ()
+    go (n - 1)
+    pure Slab{sizes,peers,payloads}
+  else die "newSlabIPv4"
+
 -- This is used internally for debug messages and for presenting
 -- unrecoverable exceptions.
-describeEndpoint :: Endpoint -> String
-describeEndpoint (Endpoint {address,port}) =
+describeEndpoint :: Peer -> String
+describeEndpoint (Peer {address,port}) =
   T.unpack (IPv4.encode address) ++ ":" ++ show port
 
 -- | Recoverable exceptions that happen when establishing an internet-domain
@@ -68,3 +123,39 @@ data SocketException :: Type where
 
 deriving stock instance Show SocketException
 deriving anyclass instance Exception SocketException
+
+freezeSlab :: Slab -> Int -> IO (SmallArray Message)
+freezeSlab slab n = do
+  msgs <- PM.newSmallArray n errorThunk
+  freezeSlabGo slab msgs (n - 1)
+
+freezeSlabGo :: Slab -> SmallMutableArray RealWorld Message -> Int -> IO (SmallArray Message)
+freezeSlabGo slab@Slab{payloads,peers,sizes} !arr !ix = if ix > (-1)
+  then do
+    !size <- PM.readPrimArray sizes ix
+    !sockaddr <- PM.readPrimArray peers ix
+    -- Remove the byte array from the array of payloads, freeze it, and
+    -- replace it with a freshly allocated byte array. 
+    payloadMut <- PM.readUnliftedArray payloads ix
+    originalSize <- PM.getSizeofMutableByteArray payloadMut
+    !payload <- PM.unsafeFreezeByteArray =<< PM.resizeMutableByteArray payloadMut (cintToInt size)
+    PM.writeUnliftedArray payloads ix =<< PM.newByteArray originalSize
+    let !peer = sockAddrToPeer sockaddr
+        !msg = Message {peer,payload}
+    PM.writeSmallArray arr ix msg
+    freezeSlabGo slab arr (ix - 1)
+  else PM.unsafeFreezeSmallArray arr
+
+{-# NOINLINE errorThunk #-}
+errorThunk :: Message
+errorThunk = error "Socket.IPv4.errorThunk"
+
+cintToInt :: CInt -> Int
+cintToInt = fromIntegral
+
+sockAddrToPeer :: S.SocketAddressInternet -> Peer
+sockAddrToPeer (S.SocketAddressInternet {address,port}) = Peer
+  { address = IPv4 (S.networkToHostLong address)
+  , port = S.networkToHostShort port
+  }
+
