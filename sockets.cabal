@@ -66,6 +66,11 @@ flag debug
   description: Print debug output 
   default: False
 
+flag checked
+  manual: True
+  description: Add bounds-checking to primitive array operations
+  default: False
+
 flag example
   manual: True
   description: Build example executables
@@ -76,11 +81,14 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , ip >= 1.4.1
     , posix-api >= 0.2.1
-    , primitive-checked >= 0.6.4
     , primitive-atomic >= 0.1 && <0.2
     , stm >= 2.4
     , text >= 1.2
     , byteslice >=0.1 && <0.2
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   exposed-modules:
     Socket
     Socket.AddrLength
@@ -180,10 +188,13 @@ library sockets-datagram-receive-many
     , error-codes >= 0.1 && < 0.2
     , stm >= 2.4
     , posix-api >= 0.2.1
-    , primitive-checked >= 0.6.4
     , byteslice >= 0.1.0.0
     , sockets-datagram-receive
     , sockets-internal
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   exposed-modules:
     Datagram.Receive.Many.Indefinite
   signatures:
@@ -413,7 +424,6 @@ library
     , error-codes >=0.1 && <0.2
     , ip >=1.4.1
     , posix-api >=0.2.1
-    , primitive-checked >=0.6.4
     , primitive-atomic
     , sockets-datagram-send
     , sockets-datagram-receive
@@ -423,6 +433,10 @@ library
     , sockets-internal
     , stm >=2.4
     , text >=1.2
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   hs-source-dirs: src
   if flag(mmsg)
     hs-source-dirs: src-mmsg
@@ -441,10 +455,13 @@ test-suite test
     , tasty
     , tasty-hunit
     , ip >= 1.4.1
-    , primitive-checked >= 0.6.4
     , async
     , bytestring
     , byteslice
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
 
@@ -454,9 +471,12 @@ benchmark macro
     , base >= 4.11.1.0 && < 5
     , sockets
     , ip >= 1.4.1
-    , primitive-checked >= 0.6.4
     , bytestring >= 0.10.8.2
     , entropy >= 0.4.1.4
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -468,9 +488,12 @@ benchmark http
     , base >= 4.11.1.0 && < 5
     , sockets
     , ip >= 1.4.1
-    , primitive-checked >= 0.6.4
     , bytestring >= 0.10.8.2
     , byteslice >= 0.1
+  if flag(checked)
+    build-depends: primitive >= 0.6.4
+  else
+    build-depends: primitive-checked >= 0.6.4.2
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -482,9 +505,12 @@ executable sockets-example
       , base >= 4.11.1.0 && < 5
       , sockets
       , ip >= 1.4.1
-      , primitive-checked >= 0.6.4
       , bytestring >= 0.10.8.2
       , fast-logger >= 2.4.13
+    if flag(checked)
+      build-depends: primitive >= 0.6.4
+    else
+      build-depends: primitive-checked >= 0.6.4.2
   else
     buildable: False
   hs-source-dirs: example
