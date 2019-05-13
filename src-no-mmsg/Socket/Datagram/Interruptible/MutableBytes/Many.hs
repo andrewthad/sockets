@@ -36,7 +36,6 @@ import qualified Socket.Discard
 import qualified Socket as SCK
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
-import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Many.Unit as RU
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Many.IPv4 as RV4

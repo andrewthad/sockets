@@ -19,9 +19,7 @@ module Socket.Datagram.Interruptible.MutableBytes
 import Data.Bytes.Types (MutableBytes)
 import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
 import Control.Concurrent.STM (TVar)
-import Data.Kind (Type)
 import GHC.Exts (RealWorld)
-import System.Posix.Types (Fd)
 import Socket.IPv4 (Peer,Receipt)
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
 import qualified Socket.Datagram.Interruptible.MutableBytes.Many as MM

@@ -5,11 +5,13 @@
 {-# language ScopedTypeVariables #-}
 {-# language TypeFamilies #-}
 
+import Control.Applicative (liftA3)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Async (concurrently)
 import Control.Monad (replicateM_)
 import Control.Exception (Exception)
 import Control.Exception (throwIO)
+import Control.Monad (when)
 import Control.Monad.ST (runST)
 import Data.ByteString (ByteString)
 import Data.Bytes.Types (Bytes(..),MutableBytes(..))
@@ -53,6 +55,8 @@ tests canSpoof = testGroup "socket"
         [ testCase "A" testDatagramUndestinedA
         , testCase "B" testDatagramUndestinedB
         , testCase "C" testDatagramUndestinedC
+        , testCase "D" testDatagramUndestinedD
+        , testCase "E" testDatagramUndestinedE
         ]
       , testGroup "spoof" $ if canSpoof
           then
@@ -118,33 +122,30 @@ testDatagramUndestinedB :: Assertion
 testDatagramUndestinedB = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
   (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
-  (port,received) <- concurrently (sender m n) (receiver m n)
-  let expected = 
-        ( DIU.Message (DIU.Peer IPv4.loopback port) message1
-        , DIU.Message (DIU.Peer IPv4.loopback port) message2
-        )
+  ((),received) <- concurrently (sender m n) (receiver m n)
+  let expected = (message1,message2)
   expected @=? received
   where
-  message1 = E.fromList [0,1,2,3] :: ByteArray
-  message2 = E.fromList [4,5,6,7,8,9,10] :: ByteArray
+  message1 = E.fromList [0..3] :: ByteArray
+  message2 = E.fromList [4..11] :: ByteArray
   sz1 = PM.sizeofByteArray message1
   sz2 = PM.sizeofByteArray message2
-  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
-  sender m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock srcPort -> do
+  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO ()
+  sender m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock _ -> do
     dstPort <- PM.takeMVar m
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
     PM.putMVar n ()
-    pure srcPort
-  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message)
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (ByteArray,ByteArray)
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newSlabIPv4 2 (max sz1 sz2)
-    msgs <- unhandled $ DUB.receiveManyFromIPv4 sock slab
-    if PM.sizeofSmallArray msgs == 2
-      then pure (PM.indexSmallArray msgs 0, PM.indexSmallArray msgs 1)
-      else fail "received a number of messages other than 2"
+    slab <- DUB.newSlab 2 (max sz1 sz2)
+    msgs <- unhandled $ DUB.receiveMany sock slab
+    let msgCount = PM.sizeofUnliftedArray msgs
+    if msgCount == 2
+      then pure (PM.indexUnliftedArray msgs 0, PM.indexUnliftedArray msgs 1)
+      else fail ("received a number of messages other than 2: " ++ show msgCount)
       
 testDatagramUndestinedC :: Assertion
 testDatagramUndestinedC = do
@@ -155,38 +156,105 @@ testDatagramUndestinedC = do
         ( DIU.Message (DIU.Peer IPv4.loopback port) message1
         , DIU.Message (DIU.Peer IPv4.loopback port) message2
         , DIU.Message (DIU.Peer IPv4.loopback port) message3
+        , DIU.Message (DIU.Peer IPv4.loopback port) message4
         )
   expected @=? received
   where
   message1 = E.fromList (enumFromTo 0 9):: ByteArray
   message2 = E.fromList (enumFromTo 10 12) :: ByteArray
   message3 = E.fromList (enumFromTo 13 27) :: ByteArray
+  message4 = E.fromList (enumFromTo 28 31) :: ByteArray
   sz1 = PM.sizeofByteArray message1
   sz2 = PM.sizeofByteArray message2
   sz3 = PM.sizeofByteArray message3
+  sz4 = PM.sizeofByteArray message4
   sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO Word16
   sender m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock srcPort -> do
     dstPort <- PM.takeMVar m
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message3)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message4)
     PM.putMVar n ()
     pure srcPort
-  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (DIU.Message,DIU.Message,DIU.Message)
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld ()
+           -> IO (DIU.Message,DIU.Message,DIU.Message,DIU.Message)
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newSlabIPv4 2 (max sz1 (max sz2 sz3))
+    slab <- DUB.newSlabIPv4 3 (max sz1 (max sz2 (max sz3 sz4)))
     msgsX <- unhandled $ DUB.receiveManyFromIPv4 sock slab
-    (msg1,msg2) <- if PM.sizeofSmallArray msgsX == 2
-      then pure (PM.indexSmallArray msgsX 0, PM.indexSmallArray msgsX 1)
-      else fail "received a number of messages other than 2"
+    let msgCountX = PM.sizeofSmallArray msgsX
+    (msg1,msg2,msg3) <- if PM.sizeofSmallArray msgsX == 3
+      then pure (PM.indexSmallArray msgsX 0, PM.indexSmallArray msgsX 1, PM.indexSmallArray msgsX 2)
+      else fail $ "received a number of messages other than 3: " ++ show msgCountX
     msgsY <- unhandled $ DUB.receiveManyFromIPv4 sock slab
-    msg3 <- if PM.sizeofSmallArray msgsY == 1
+    let msgCountY = PM.sizeofSmallArray msgsY
+    msg4 <- if msgCountY == 1
       then pure (PM.indexSmallArray msgsY 0)
-      else fail "received a number of messages other than 2"
-    pure (msg1,msg2,msg3)
-      
+      else fail $ "received a number of messages other than 1: " ++ show msgCountY
+    pure (msg1,msg2,msg3,msg4)
+
+testDatagramUndestinedD :: Assertion
+testDatagramUndestinedD = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  let expected = (message1,message2,message3)
+  expected @=? received
+  where
+  message1 = E.fromList (enumFromTo 0 15):: ByteArray
+  message2 = E.fromList (enumFromTo 16 18) :: ByteArray
+  message3 = E.fromList (enumFromTo 19 23) :: ByteArray
+  sz1 = PM.sizeofByteArray message1
+  sz2 = PM.sizeofByteArray message2
+  sz3 = PM.sizeofByteArray message3
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = unhandled $ DIU.withSocket (DUB.Peer IPv4.loopback 0) $ \sock _ -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message3)
+  receiver :: PM.MVar RealWorld Word16 -> IO (ByteArray,ByteArray,ByteArray)
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    liftA3 (,,)
+      (unhandled $ DUB.receive sock sz1)
+      (unhandled $ DUB.receive sock sz2)
+      (unhandled $ DUB.receive sock sz3)
+
+testDatagramUndestinedE :: Assertion
+testDatagramUndestinedE = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  (n :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m n) (receiver m n)
+  let expected = (message1,message2,message3)
+  expected @=? received
+  where
+  message1 = E.fromList (enumFromTo 0 9):: ByteArray
+  message2 = E.fromList (enumFromTo 10 14) :: ByteArray
+  message3 = E.fromList (enumFromTo 15 21) :: ByteArray
+  sz1 = PM.sizeofByteArray message1
+  sz2 = PM.sizeofByteArray message2
+  sz3 = PM.sizeofByteArray message3
+  sender :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO ()
+  sender !m !n = unhandled $ DIU.withSocket (DUB.Peer IPv4.loopback 0) $ \sock _ -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message1)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message2)
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message3)
+    PM.putMVar n ()
+  receiver :: PM.MVar RealWorld Word16 -> PM.MVar RealWorld () -> IO (ByteArray,ByteArray,ByteArray)
+  receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    PM.takeMVar n
+    slab <- DUB.newSlab 1 (max sz1 (max sz2 sz3))
+    msgsX <- unhandled $ DUB.receiveMany sock slab
+    when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for X"
+    msgsY <- unhandled $ DUB.receiveMany sock slab
+    when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for Y"
+    msgsZ <- unhandled $ DUB.receiveMany sock slab
+    when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for Z"
+    pure (PM.indexUnliftedArray msgsX 0,PM.indexUnliftedArray msgsY 0,PM.indexUnliftedArray msgsZ 0)
 
 -- This test involves a made up protocol that goes like this:
 -- The sender always starts by sending the length of the rest

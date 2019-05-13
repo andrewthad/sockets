@@ -5,8 +5,10 @@
 {-# language DuplicateRecordFields #-}
 {-# language GADTs #-}
 {-# language KindSignatures #-}
+{-# language MagicHash #-}
 {-# language NamedFieldPuns #-}
 {-# language StandaloneDeriving #-}
+{-# language UnboxedTuples #-}
 
 module Socket.IPv4
   ( Peer(..)
@@ -20,20 +22,22 @@ module Socket.IPv4
   ) where
 
 import Control.Exception (Exception)
+import Control.Monad.Primitive (primitive_,primitive)
 import Data.Kind (Type)
-import Data.Word (Word16)
-import Net.Types (IPv4(..))
 import Data.Primitive (ByteArray(..),MutableByteArray,MutableUnliftedArray)
-import Data.Primitive (SmallArray,SmallMutableArray)
 import Data.Primitive (MutablePrimArray)
+import Data.Primitive (SmallArray,SmallMutableArray)
+import Data.Word (Word16)
 import Foreign.C.Types (CInt)
-import GHC.Exts (RealWorld)
+import GHC.Exts (RealWorld,Int(I#))
+import Net.Types (IPv4(..))
 import Socket.Error (die)
 
 import qualified Data.Primitive as PM
-import qualified Posix.Socket as S
 import qualified Data.Text as T
+import qualified GHC.Exts as Exts
 import qualified Net.IPv4 as IPv4
+import qualified Posix.Socket as S
 
 -- | An peer for an IPv4 socket, connection, or listener.
 --   Everything is in host byte order, and the user is not
@@ -78,7 +82,7 @@ newSlabIPv4 !n !m = if n >= 1 && m >= 1
     payloads <- PM.unsafeNewUnliftedArray n
     let go !ix = if ix > (-1)
           then do
-            PM.writeUnliftedArray payloads ix =<< PM.newByteArray m
+            writeMutableByteArrayArray payloads ix =<< PM.newByteArray m
             go (ix - 1)
           else pure ()
     go (n - 1)
@@ -136,10 +140,10 @@ freezeSlabGo slab@Slab{payloads,peers,sizes} !arr !ix = if ix > (-1)
     !sockaddr <- PM.readPrimArray peers ix
     -- Remove the byte array from the array of payloads, freeze it, and
     -- replace it with a freshly allocated byte array. 
-    payloadMut <- PM.readUnliftedArray payloads ix
+    payloadMut <- readMutableByteArrayArray payloads ix
     originalSize <- PM.getSizeofMutableByteArray payloadMut
     !payload <- PM.unsafeFreezeByteArray =<< PM.resizeMutableByteArray payloadMut (cintToInt size)
-    PM.writeUnliftedArray payloads ix =<< PM.newByteArray originalSize
+    writeMutableByteArrayArray payloads ix =<< PM.newByteArray originalSize
     let !peer = sockAddrToPeer sockaddr
         !msg = Message {peer,payload}
     PM.writeSmallArray arr ix msg
@@ -159,3 +163,18 @@ sockAddrToPeer (S.SocketAddressInternet {address,port}) = Peer
   , port = S.networkToHostShort port
   }
 
+writeMutableByteArrayArray
+  :: MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ destination
+  -> Int -- ^ index
+  -> MutableByteArray RealWorld -- ^ value
+  -> IO ()
+writeMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (PM.MutableByteArray a)
+  = primitive_ (Exts.writeMutableByteArrayArray# maa# i# a)
+
+readMutableByteArrayArray
+  :: MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ source
+  -> Int -- ^ index
+  -> IO (MutableByteArray RealWorld)
+readMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#)
+  = primitive $ \s -> case Exts.readMutableByteArrayArray# maa# i# s of
+      (# s', aa# #) -> (# s', PM.MutableByteArray aa# #)

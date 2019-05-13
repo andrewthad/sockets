@@ -28,7 +28,7 @@ module Socket.Datagram.Uninterruptible.Bytes
 import Data.Bytes.Types (Bytes,MutableBytes(..))
 import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive (UnliftedArray)
-import GHC.Exts (RealWorld,proxy#)
+import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
 import Socket.IPv4 (Peer(..),Message(..),Receipt(..),Slab(..),freezeSlab)

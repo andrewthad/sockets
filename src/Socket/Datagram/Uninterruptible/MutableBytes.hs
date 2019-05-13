@@ -19,10 +19,7 @@ module Socket.Datagram.Uninterruptible.MutableBytes
 
 import Data.Bytes.Types (MutableBytes)
 import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
-import Control.Concurrent.STM (TVar)
-import Data.Kind (Type)
 import GHC.Exts (RealWorld,proxy#)
-import System.Posix.Types (Fd)
 import Socket.IPv4 (Peer,Receipt)
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Many as MM

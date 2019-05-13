@@ -10,33 +10,15 @@ module Socket.Datagram.Uninterruptible.MutableBytes.Many
   , receiveManyFromIPv4
   ) where
 
-import Control.Applicative ((<|>))
-import Control.Monad.STM (STM,atomically)
-import Control.Concurrent (threadWaitWrite,threadWaitRead,threadWaitReadSTM)
-import Control.Concurrent.STM (TVar)
-import Control.Exception (mask,onException)
-import Data.Functor (($>))
-import Data.Primitive (ByteArray,MutableByteArray(..),Array)
-import Data.Word (Word16)
-import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
-import Foreign.C.Types (CInt,CSize,CUInt)
-import GHC.Exts (Int(I#),RealWorld,proxy#)
+import GHC.Exts (proxy#)
 import GHC.IO (IO(..))
-import Net.Types (IPv4(..))
 import Socket (Interruptibility(Uninterruptible))
 import Socket (Connectedness(..))
 import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.Debug (debug)
-import Socket.IPv4 (Peer(..),Message(..),Slab(..))
-import System.Posix.Types (Fd)
+import Socket.IPv4 (Slab(..))
 
-import qualified Socket.IPv4
 import qualified Socket.Discard
 import qualified Socket as SCK
-import qualified Control.Monad.Primitive as PM
-import qualified Data.Primitive as PM
-import qualified Linux.Socket as L
-import qualified Posix.Socket as S
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.Unit as RU
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.IPv4 as RV4
 
@@ -66,5 +48,5 @@ receiveManyFromIPv4 ::
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
-receiveManyFromIPv4 (Socket fd) (Slab lens addrs bufs) =
-  RV4.receiveMany proxy# fd lens addrs bufs
+receiveManyFromIPv4 (Socket fd) (Socket.IPv4.Slab{sizes,peers,payloads}) =
+  RV4.receiveMany proxy# fd sizes peers payloads

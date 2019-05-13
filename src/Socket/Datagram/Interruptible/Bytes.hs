@@ -25,7 +25,6 @@ import Data.Bytes.Types (MutableBytes(..),Bytes(..))
 import System.Posix.Types (Fd)
 import Socket.IPv4 (Peer,Message(..),Receipt(..),Slab(..))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Foreign.C.Types (CInt)
 
 import qualified Data.Primitive as PM
 import qualified Socket.IPv4
