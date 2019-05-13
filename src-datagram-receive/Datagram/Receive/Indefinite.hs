@@ -16,6 +16,7 @@ import Foreign.C.Types (CSize)
 import Socket.Error (die)
 import Socket.EventManager (Token)
 import Socket.Datagram (ReceiveException(..))
+import Socket.Debug (debug)
 import Socket.Buffer (Buffer)
 import Socket.Interrupt (Interrupt,Intr,wait,tokenToDatagramReceiveException)
 import System.Posix.Types (Fd)
@@ -62,6 +63,9 @@ receiveAttempt !fd !buf = do
         , describeErrorCode err
         ]
     Right (sockAddrRequiredSz,sockAddr,recvSz) -> do
+      debug 
+         $ "receiveAttempt: [buffer=" ++ show (Buffer.length buf)
+        ++ "][payload=" ++ show recvSz ++ "]"
       peer <- decodeAddress sockAddrRequiredSz sockAddr
       let !recvSzInt = csizeToInt recvSz
       if recvSzInt <= Buffer.length buf

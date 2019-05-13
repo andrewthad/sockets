@@ -11,17 +11,21 @@ module Socket.Datagram.Uninterruptible.MutableBytes.Many
   ) where
 
 import Control.Concurrent.STM (TVar)
+import Control.Monad.Primitive (primitive)
+import Data.Primitive (MutablePrimArray,MutableUnliftedArray,MutableByteArray)
 import Foreign.C.Error (eWOULDBLOCK,eAGAIN)
 import Foreign.C.Types (CInt,CUInt)
+import GHC.Exts (RealWorld,Int(I#))
 import GHC.IO (IO(..))
-import Socket (Interruptibility(Uninterruptible))
 import Socket (Connectedness(..))
-import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.IPv4 (Slab(..))
+import Socket (Interruptibility(Uninterruptible))
+import Socket.Datagram (Socket(..),ReceiveException(ReceiveTruncated))
 import Socket.Error (die)
+import Socket.IPv4 (Slab(..))
 import System.Posix.Types (Fd)
 
 import qualified Data.Primitive as PM
+import qualified GHC.Exts as Exts
 import qualified Linux.Socket as L
 import qualified Socket as SCK
 import qualified Socket.Discard
@@ -57,7 +61,6 @@ receiveManyGo ::
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
 receiveManyGo !sz !tv !fd !slab@(Socket.Discard.Slab{sizes,payloads}) !token0 = do
   e <- L.uninterruptibleReceiveMultipleMessageD fd sizes payloads sz L.truncate
-  -- TODO: add truncation check
   case e of
     Left err -> if err == eAGAIN || err == eWOULDBLOCK
       then do
@@ -67,7 +70,22 @@ receiveManyGo !sz !tv !fd !slab@(Socket.Discard.Slab{sizes,payloads}) !token0 = 
       else die "receiveMany"
     Right grams -> if grams == 0
       then die "receiveMany: 0 datagrams"
-      else pure $! Right $! cintToInt grams
+      else validateSizes sizes payloads (cintToInt grams) 0
+
+validateSizes ::
+     MutablePrimArray RealWorld CInt
+  -> MutableUnliftedArray RealWorld (MutableByteArray RealWorld)
+  -> Int
+  -> Int
+  -> IO (Either (ReceiveException 'Uninterruptible) Int)
+validateSizes !lens !bufs !total !ix = if ix < total
+  then do
+    reqLen <- PM.readPrimArray lens ix
+    bufLen <- readMutableByteArrayArray bufs ix >>= PM.getSizeofMutableByteArray
+    if cintToInt reqLen <= bufLen
+      then validateSizes lens bufs total (ix + 1)
+      else pure $! Left $! ReceiveTruncated $! cintToInt reqLen
+  else pure $! Right $! total
 
 -- | Variant of 'receiveMany' that provides that source address
 -- corresponding to each datagram. This introduces another array
@@ -111,3 +129,11 @@ intToCUInt = fromIntegral
 
 cintToInt :: CInt -> Int
 cintToInt = fromIntegral
+
+readMutableByteArrayArray
+  :: MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ source
+  -> Int -- ^ index
+  -> IO (MutableByteArray RealWorld)
+readMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#)
+  = primitive $ \s -> case Exts.readMutableByteArrayArray# maa# i# s of
+      (# s', aa# #) -> (# s', PM.MutableByteArray aa# #)

@@ -31,6 +31,7 @@ data SendException :: Interruptibility -> Type where
   SendInterrupted :: SendException 'Interruptible
 
 deriving stock instance Show (SendException i)
+deriving stock instance Eq (SendException i)
 deriving anyclass instance (Typeable i) => Exception (SendException i)
 
 data ReceiveException :: Interruptibility -> Type where
@@ -43,6 +44,7 @@ data ReceiveException :: Interruptibility -> Type where
   ReceiveInterrupted :: ReceiveException 'Interruptible
 
 deriving stock instance Show (ReceiveException i)
+deriving stock instance Eq (ReceiveException i)
 deriving anyclass instance (Typeable i) => Exception (ReceiveException i)
 
 -- | A datagram socket. The 'Connectedness' refers to whether or

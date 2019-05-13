@@ -20,6 +20,7 @@ module Socket.Datagram.Uninterruptible.Bytes
     -- * Types
   , Message(..)
   , Peer(..)
+  , ReceiveException(..)
     -- * Slabs
   , newSlab
   , newSlabIPv4
@@ -30,7 +31,7 @@ import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive (UnliftedArray)
 import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
-import Socket.Datagram (Socket(..),SendException,ReceiveException)
+import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
 import Socket.IPv4 (Peer(..),Message(..),Receipt(..),Slab(..),freezeSlab)
 import Socket.IPv4 (newSlabIPv4)
 import Socket.Discard (newSlab)

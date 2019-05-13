@@ -57,6 +57,7 @@ tests canSpoof = testGroup "socket"
         , testCase "C" testDatagramUndestinedC
         , testCase "D" testDatagramUndestinedD
         , testCase "E" testDatagramUndestinedE
+        , testCase "F" testDatagramUndestinedF
         ]
       , testGroup "spoof" $ if canSpoof
           then
@@ -255,6 +256,23 @@ testDatagramUndestinedE = do
     msgsZ <- unhandled $ DUB.receiveMany sock slab
     when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for Z"
     pure (PM.indexUnliftedArray msgsX 0,PM.indexUnliftedArray msgsY 0,PM.indexUnliftedArray msgsZ 0)
+
+testDatagramUndestinedF :: Assertion
+testDatagramUndestinedF = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  let expected = (Left (DUB.ReceiveTruncated sz))
+  expected @=? received
+  where
+  message = E.fromList (enumFromTo 0 11):: ByteArray
+  sz = PM.sizeofByteArray message
+  sender !m = unhandled $ DIU.withSocket (DUB.Peer IPv4.loopback 0) $ \sock _ -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message)
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    slab <- DUB.newSlab 1 (sz - 1)
+    DUB.receiveMany sock slab
 
 -- This test involves a made up protocol that goes like this:
 -- The sender always starts by sending the length of the rest

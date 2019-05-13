@@ -17,14 +17,12 @@ module Socket.Discard
   ) where
 
 import Control.Monad.Primitive (primitive,primitive_)
-import Data.Kind (Type)
 import Data.Primitive (ByteArray(..),MutableByteArray,MutableUnliftedArray)
 import Data.Primitive (MutablePrimArray)
 import Data.Primitive (SmallArray,SmallMutableArray,UnliftedArray)
 import Data.Word (Word16)
 import Foreign.C.Types (CInt)
 import GHC.Exts (RealWorld,Int(I#))
-import Net.Types (IPv4(..))
 import Socket.Error (die)
 
 import qualified GHC.Exts as Exts
