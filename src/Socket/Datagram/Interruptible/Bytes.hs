@@ -15,15 +15,17 @@ module Socket.Datagram.Interruptible.Bytes
   , receiveManyFromIPv4
   ) where
 
-import Data.Bytes.Types (MutableBytes)
-import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
 import Control.Concurrent.STM (TVar)
-import Data.Kind (Type)
-import GHC.Exts (RealWorld)
-import Data.Primitive (ByteArray,SmallArray,UnliftedArray)
 import Data.Bytes.Types (MutableBytes(..),Bytes(..))
-import Socket.IPv4 (Peer,Message(..),Receipt(..),Slab(..))
+import Data.Bytes.Types (MutableBytes)
+import Data.Kind (Type)
+import Data.Primitive (ByteArray,SmallArray,UnliftedArray)
+import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
+import GHC.Exts (RealWorld)
+import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
+import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
+import Socket.IPv4 (Peer,Message(..),Receipt(..),Slab(..))
 
 import qualified Data.Primitive as PM
 import qualified Socket.IPv4
@@ -45,7 +47,7 @@ receive ::
   -> IO (Either (ReceiveException 'Interruptible) ByteArray)
 receive !intr (Socket !sock) !maxSz = do
   buf <- PM.newByteArray maxSz
-  CR.receive intr sock (MutableBytes buf 0 maxSz) >>= \case
+  CR.receive intr sock (MutableBytes buf 0 maxSz) () >>= \case
     Right sz -> do
       r <- PM.resizeMutableByteArray buf sz >>= PM.unsafeFreezeByteArray
       pure (Right r)
@@ -60,10 +62,12 @@ receiveFromIPv4 ::
   -> IO (Either (ReceiveException 'Interruptible) Message)
 receiveFromIPv4 !intr (Socket !sock) !maxSz = do
   buf <- PM.newByteArray maxSz
-  V4R.receive intr sock (MutableBytes buf 0 maxSz) >>= \case
-    Right (Receipt{peer,size}) -> do
+  addr <- PM.newPrimArray 1
+  V4R.receive intr sock (MutableBytes buf 0 maxSz) (MutablePrimArrayOffset addr 0) >>= \case
+    Right size -> do
       r <- PM.resizeMutableByteArray buf size >>= PM.unsafeFreezeByteArray
-      pure (Right (Message peer r))
+      posixAddr <- PM.readPrimArray addr 0
+      pure (Right (Message (posixToIPv4Peer posixAddr) r))
     Left err -> pure (Left err)
 
 receiveManyFromIPv4 ::

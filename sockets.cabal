@@ -81,6 +81,7 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , ip >= 1.4.1
     , posix-api >= 0.2.1
+    , primitive-offset >= 0.1 && <0.2
     , primitive-atomic >= 0.1 && <0.2
     , stm >= 2.4
     , text >= 1.2
@@ -105,15 +106,11 @@ library sockets-internal
     Socket.Discard
     Socket.Connected.MutableBytes
     Socket.Connected.Bytes
-    Socket.Decode.IPv4
-    Socket.Decode.SocketAddressInternet
     Socket.MutableBytes
     Socket.MutableBytes.Peerless
+    Socket.MutableBytes.SocketAddressInternet
     Socket.Interruptible
     Socket.Uninterruptible
-    Socket.EndpointArray.Unit
-    Socket.EndpointArray.IPv4
-    Socket.EndpointArray.SocketAddressInternet
   if flag(debug)
     hs-source-dirs: src-debug
   else
@@ -167,13 +164,13 @@ library sockets-datagram-receive
     , error-codes >= 0.1 && < 0.2
     , stm >= 2.4
     , posix-api >= 0.2.1
+    , primitive-offset >= 0.1 && <0.2
     , sockets-internal
     , sockets-buffer
     , sockets-interrupt
   exposed-modules:
     Datagram.Receive.Indefinite
   signatures:
-    Datagram.DecodeAddress
     Datagram.Receive
   hs-source-dirs: src-datagram-receive
   default-language: Haskell2010
@@ -197,8 +194,6 @@ library sockets-datagram-receive-many
     build-depends: primitive >= 0.6.4
   exposed-modules:
     Datagram.Receive.Many.Indefinite
-  signatures:
-    Datagram.Receive.Many.EndpointArray
   hs-source-dirs: src-datagram-receive-many
   mixins:
     sockets-datagram-receive
@@ -262,6 +257,7 @@ library sockets-stream-bidirectional
 
 library
   exposed-modules:
+    Socket.Address
     Socket.Datagram.IPv4.Spoof
     Socket.Datagram.IPv4.Unconnected
     Socket.Stream.IPv4
@@ -285,30 +281,22 @@ library
       (Datagram.Receive.Many.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.Unit)
       requires
       (Datagram.Receive as Socket.MutableBytes.Peerless,
-       Datagram.DecodeAddress as Socket.Peerless,
-       Socket.Interrupt as Socket.Uninterruptible,
-       Datagram.Receive.Many.EndpointArray as Socket.EndpointArray.Unit),
+       Socket.Interrupt as Socket.Uninterruptible),
     sockets-datagram-receive-many
       (Datagram.Receive.Many.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.IPv4)
       requires
-      (Datagram.Receive as Socket.MutableBytes,
-       Datagram.DecodeAddress as Socket.Decode.SocketAddressInternet,
-       Socket.Interrupt as Socket.Uninterruptible,
-       Datagram.Receive.Many.EndpointArray as Socket.EndpointArray.SocketAddressInternet),
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Uninterruptible),
     sockets-datagram-receive-many
       (Datagram.Receive.Many.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Many.Unit)
       requires
       (Datagram.Receive as Socket.MutableBytes.Peerless,
-       Datagram.DecodeAddress as Socket.Peerless,
-       Socket.Interrupt as Socket.Interruptible,
-       Datagram.Receive.Many.EndpointArray as Socket.EndpointArray.Unit),
+       Socket.Interrupt as Socket.Interruptible),
     sockets-datagram-receive-many
       (Datagram.Receive.Many.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Many.IPv4)
       requires
-      (Datagram.Receive as Socket.MutableBytes,
-       Datagram.DecodeAddress as Socket.Decode.SocketAddressInternet,
-       Socket.Interrupt as Socket.Interruptible,
-       Datagram.Receive.Many.EndpointArray as Socket.EndpointArray.SocketAddressInternet),
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Interruptible),
     sockets-datagram-send
       (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Send.IPv4)
       requires
@@ -348,29 +336,25 @@ library
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.IPv4)
       requires
-      (Datagram.Receive as Socket.MutableBytes,
-       Datagram.DecodeAddress as Socket.Decode.IPv4,
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
        Socket.Interrupt as Socket.Uninterruptible,
        Socket.Buffer as Socket.MutableBytes),
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.IPv4)
       requires
-      (Datagram.Receive as Socket.MutableBytes,
-       Datagram.DecodeAddress as Socket.Decode.IPv4,
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
        Socket.Interrupt as Socket.Interruptible,
        Socket.Buffer as Socket.MutableBytes),
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected)
       requires
       (Datagram.Receive as Socket.MutableBytes.Peerless,
-       Datagram.DecodeAddress as Socket.Peerless,
        Socket.Interrupt as Socket.Uninterruptible,
        Socket.Buffer as Socket.MutableBytes),
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Connected)
       requires
       (Datagram.Receive as Socket.MutableBytes.Peerless,
-       Datagram.DecodeAddress as Socket.Peerless,
        Socket.Interrupt as Socket.Interruptible,
        Socket.Buffer as Socket.MutableBytes),
     sockets-stream-send
@@ -425,12 +409,13 @@ library
     , ip >=1.4.1
     , posix-api >=0.2.1
     , primitive-atomic
-    , sockets-datagram-send
+    , primitive-offset >= 0.1 && <0.2
     , sockets-datagram-receive
     , sockets-datagram-receive-many
-    , sockets-stream-send
-    , sockets-stream-bidirectional
+    , sockets-datagram-send
     , sockets-internal
+    , sockets-stream-bidirectional
+    , sockets-stream-send
     , stm >=2.4
     , text >=1.2
   if flag(checked)

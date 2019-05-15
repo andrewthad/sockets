@@ -9,8 +9,6 @@ module Datagram.Receive.Indefinite
   ) where
 
 import Control.Concurrent.STM (TVar)
-import Datagram.DecodeAddress (Peer,Reception,maxAddressSize,decodeAddress)
-import Datagram.DecodeAddress (buildReception)
 import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK)
 import Foreign.C.Types (CSize)
 import Socket.Error (die)
@@ -35,26 +33,28 @@ receive ::
      Interrupt
   -> Fd
   -> Buffer
-  -> IO (Either (ReceiveException Intr) Reception)
-receive !intr !sock !buf = do
+  -> Receive.AddressBufferOffset
+  -> IO (Either (ReceiveException Intr) Int)
+receive !intr !sock !buf !addrBuf = do
   let !mngr = EM.manager
   tv <- EM.reader mngr sock
   token0 <- wait intr tv
   case tokenToDatagramReceiveException token0 of
     Left err -> pure (Left err)
-    Right _ -> receiveLoop intr tv token0 sock buf
+    Right _ -> receiveLoop intr tv token0 sock buf addrBuf
 
 receiveAttempt ::
      Fd -- ^ Socket
   -> Buffer -- ^ Buffer
-  -> IO (Either (ReceiveException Intr) (Maybe Reception))
+  -> Receive.AddressBufferOffset -- ^ Buffer for the address
+  -> IO (Either (ReceiveException Intr) (Maybe Int))
 {-# inline receiveAttempt #-}
-receiveAttempt !fd !buf = do
+receiveAttempt !fd !buf !addrBuf = do
   -- We use MSG_TRUNC so that we are able to figure out
   -- whether or not bytes were discarded. If bytes were
   -- discarded (meaning that the buffer was too small),
   -- we return an exception.
-  e <- Receive.receiveFromOnce fd buf L.truncate maxAddressSize
+  e <- Receive.receiveFromOnce fd buf L.truncate addrBuf
   case e of
     Left err -> if err == eWOULDBLOCK || err == eAGAIN
       then pure (Right Nothing)
@@ -62,14 +62,10 @@ receiveAttempt !fd !buf = do
         [ "Socket.Datagram.receive: " 
         , describeErrorCode err
         ]
-    Right (sockAddrRequiredSz,sockAddr,recvSz) -> do
-      debug 
-         $ "receiveAttempt: [buffer=" ++ show (Buffer.length buf)
-        ++ "][payload=" ++ show recvSz ++ "]"
-      peer <- decodeAddress sockAddrRequiredSz sockAddr
+    Right recvSz -> do
       let !recvSzInt = csizeToInt recvSz
       if recvSzInt <= Buffer.length buf
-        then pure (Right (Just (buildReception peer recvSzInt)))
+        then pure (Right (Just recvSzInt))
         else pure (Left (ReceiveTruncated recvSzInt))
 
 receiveLoop ::
@@ -78,14 +74,15 @@ receiveLoop ::
   -> Token
   -> Fd -- ^ Socket
   -> Buffer -- ^ Buffer
-  -> IO (Either (ReceiveException Intr) Reception)
-receiveLoop !intr !tv !token0 !fd !buf = receiveAttempt fd buf >>= \case
+  -> Receive.AddressBufferOffset
+  -> IO (Either (ReceiveException Intr) Int)
+receiveLoop !intr !tv !token0 !fd !buf !addrBuf = receiveAttempt fd buf addrBuf >>= \case
   Left err -> pure (Left err)
   Right m -> case m of
     Nothing -> do
       EM.unready token0 tv
       token1 <- wait intr tv
-      receiveLoop intr tv token1 fd buf
+      receiveLoop intr tv token1 fd buf addrBuf
     Just !r -> pure (Right r)
 
 csizeToInt :: CSize -> Int

@@ -16,12 +16,15 @@ module Socket.Datagram.Interruptible.MutableBytes
   , MM.receiveManyFromIPv4
   ) where
 
-import Data.Bytes.Types (MutableBytes)
-import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
 import Control.Concurrent.STM (TVar)
+import Data.Bytes.Types (MutableBytes)
+import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import GHC.Exts (RealWorld)
-import Socket.IPv4 (Peer,Receipt)
+import Posix.Socket (SocketAddressInternet)
+import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
+import Socket.IPv4 (Peer,Receipt)
+
 import qualified Socket.Datagram.Interruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Connected as CR
 import qualified Socket.Datagram.Interruptible.MutableBytes.Send.Connected as CS
@@ -50,7 +53,7 @@ receive ::
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (ReceiveException 'Interruptible) Int)
 receive !intr (Socket !sock) !buf =
-  CR.receive intr sock buf >>= \case
+  CR.receive intr sock buf () >>= \case
     Right sz -> pure (Right sz)
     Left err -> pure (Left err)
 
@@ -69,7 +72,9 @@ receiveFromIPv4 ::
      -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
-  -> IO (Either (ReceiveException 'Interruptible) Receipt)
-receiveFromIPv4 !intr (Socket !sock) !buf =
-  V4R.receive intr sock buf
+  -> MutablePrimArrayOffset RealWorld SocketAddressInternet
+     -- ^ Buffer for returned peer address
+  -> IO (Either (ReceiveException 'Interruptible) Int)
+receiveFromIPv4 !intr (Socket !sock) !buf !addr =
+  V4R.receive intr sock buf addr
 

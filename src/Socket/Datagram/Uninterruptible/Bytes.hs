@@ -29,10 +29,12 @@ module Socket.Datagram.Uninterruptible.Bytes
 import Data.Bytes.Types (Bytes,MutableBytes(..))
 import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive (UnliftedArray)
+import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
 import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
+import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
-import Socket.IPv4 (Peer(..),Message(..),Receipt(..),Slab(..),freezeSlab)
+import Socket.IPv4 (Peer(..),Message(..),Slab(..),freezeSlab)
 import Socket.IPv4 (newSlabIPv4)
 import Socket.Discard (newSlab)
 
@@ -72,7 +74,7 @@ receive ::
   -> IO (Either (ReceiveException 'Uninterruptible) ByteArray)
 receive (Socket !sock) !maxSz = do
   buf <- PM.newByteArray maxSz
-  CR.receive proxy# sock (MutableBytes buf 0 maxSz) >>= \case
+  CR.receive proxy# sock (MutableBytes buf 0 maxSz) () >>= \case
     Right sz -> do
       r <- PM.resizeMutableByteArray buf sz >>= PM.unsafeFreezeByteArray
       pure (Right r)
@@ -84,10 +86,12 @@ receiveFromIPv4 ::
   -> IO (Either (ReceiveException 'Uninterruptible) Message)
 receiveFromIPv4 (Socket !sock) !maxSz = do
   buf <- PM.newByteArray maxSz
-  V4R.receive proxy# sock (MutableBytes buf 0 maxSz) >>= \case
-    Right (Receipt{peer,size}) -> do
+  addr <- PM.newPrimArray 1
+  V4R.receive proxy# sock (MutableBytes buf 0 maxSz) (MutablePrimArrayOffset addr 0) >>= \case
+    Right size -> do
       r <- PM.resizeMutableByteArray buf size >>= PM.unsafeFreezeByteArray
-      pure (Right (Message peer r))
+      posixAddr <- PM.readPrimArray addr 0
+      pure (Right (Message (posixToIPv4Peer posixAddr) r))
     Left err -> pure (Left err)
 
 receiveManyFromIPv4 ::

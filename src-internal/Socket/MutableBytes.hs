@@ -7,15 +7,16 @@ module Socket.MutableBytes
   , length
   , sendOnce
   , receiveOnce
-  , receiveFromOnce
   ) where
 
 import Prelude hiding (length)
 
 import Data.Bytes.Types (MutableBytes(..))
+import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
+import Data.Primitive.ByteArray.Offset (MutableByteArrayOffset(..))
 import Posix.Socket (uninterruptibleSendMutableByteArray)
 import Posix.Socket (uninterruptibleReceiveMutableByteArray)
-import Posix.Socket (noSignal)
+import Posix.Socket (SocketAddressInternet,noSignal)
 import Posix.Socket (MessageFlags,Message(Receive))
 import Foreign.C.Types (CInt,CSize)
 import Foreign.C.Error (Errno)
@@ -24,7 +25,11 @@ import GHC.Exts (RealWorld)
 
 import qualified Posix.Socket as S
 
+-- TODO: move AddressBuffer out of here. This will come back to
+-- bite me eventually.
+
 type Buffer = MutableBytes RealWorld
+type AddressBuffer = SocketAddressInternet
 
 advance :: MutableBytes RealWorld -> Int -> MutableBytes RealWorld
 {-# inline advance #-}
@@ -43,17 +48,6 @@ receiveOnce :: Fd -> MutableBytes RealWorld -> IO (Either Errno CSize)
 {-# inline receiveOnce #-}
 receiveOnce fd (MutableBytes arr off len) =
   uninterruptibleReceiveMutableByteArray fd arr (intToCInt off) (intToCSize len) mempty
-
-receiveFromOnce ::
-     Fd
-  -> MutableBytes RealWorld
-  -> MessageFlags 'Receive
-  -> CInt
-  -> IO (Either Errno (CInt, S.SocketAddress, CSize))
-{-# inline receiveFromOnce #-}
-receiveFromOnce !sock (MutableBytes arr off len) !flags !addrSz =
-  S.uninterruptibleReceiveFromMutableByteArray sock arr
-    (intToCInt off) (intToCSize len) flags addrSz
 
 intToCInt :: Int -> CInt
 {-# inline intToCInt #-}

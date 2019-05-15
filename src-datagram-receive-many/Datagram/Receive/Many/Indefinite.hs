@@ -14,8 +14,6 @@ import Data.Primitive (MutablePrimArray)
 import Data.Primitive (PrimArray,UnliftedArray,MutableByteArray)
 import Data.Primitive (MutableUnliftedArray)
 import Data.Word (Word8)
-import Datagram.Receive.Many.EndpointArray (MutableEndpointArray)
-import Datagram.DecodeAddress (receptionPeer,receptionSize)
 import Foreign.C.Types (CInt)
 import GHC.Exts (RealWorld,Int(I#))
 import Socket.Debug (debug,whenDebugging)
@@ -25,8 +23,8 @@ import Socket.Interrupt (Intr,Interrupt)
 import Socket.Interrupt (wait,tokenToDatagramReceiveException)
 import System.Posix.Types (Fd)
 
+import qualified Datagram.Receive as Receive
 import qualified Data.Primitive as PM
-import qualified Datagram.Receive.Many.EndpointArray as A
 import qualified GHC.Exts as Exts
 import qualified Socket.EventManager as EM
 
@@ -41,10 +39,10 @@ receiveMany ::
      Interrupt
   -> Fd -- ^ Socket
   -> MutablePrimArray RealWorld CInt
-  -> MutableEndpointArray
+  -> Receive.AddressBuffer
   -> MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ Buffers
   -> IO (Either (ReceiveException Intr) Int)
-receiveMany !intr !sock !lens !ends !bufs = do
+receiveMany !intr !sock !lens !addrs !bufs = do
   let !mngr = EM.manager
       !lenBufs = PM.sizeofMutableUnliftedArray bufs
   tv <- EM.reader mngr sock
@@ -59,16 +57,13 @@ receiveMany !intr !sock !lens !ends !bufs = do
           then PM.readByteArray buf0 0
           else pure 0
         debug $ "receiveMany: datagram 0 pre-run first byte: " ++ show byte0
-      receiveLoop intr tv token0 sock (MutableBytes buf0 0 sz0) >>= \case
+      receiveLoop intr tv token0 sock (MutableBytes buf0 0 sz0) (Receive.offsetAddress addrs 0) >>= \case
         Left err -> pure (Left err)
-        Right r0 -> do
+        Right recvSz0 -> do
           -- What a shame that this must be converted from Int to CInt
           -- after just having been converted the other direction in
           -- receiveLoop. Oh well.
-          let peer0 = receptionPeer r0
-              recvSz0 = receptionSize r0
           PM.writePrimArray lens 0 (intToCInt recvSz0)
-          A.write ends 0 peer0
           whenDebugging $ do
             (byte0 :: Word8) <- if recvSz0 > 0
               then PM.readByteArray buf0 0
@@ -89,15 +84,12 @@ receiveMany !intr !sock !lens !ends !bufs = do
                     debug $ "receiveMany: datagram " ++ show ix ++ " pre-run [first_byte="
                          ++ show byte0 ++ "][length=" ++ show len0 ++ "][buf_addr="
                          ++ show addr0 ++ "]"
-                  receiveAttempt sock (MutableBytes buf 0 sz) >>= \case
+                  receiveAttempt sock (MutableBytes buf 0 sz) (Receive.offsetAddress addrs ix) >>= \case
                     Left err -> pure (Left err)
                     Right m -> case m of
                       Nothing -> pure (Right ix)
-                      Just r -> do
-                        let peer = receptionPeer r
-                            recvSz = receptionSize r
+                      Just recvSz -> do
                         PM.writePrimArray lens ix (intToCInt recvSz)
-                        A.write ends ix peer
                         whenDebugging $ do
                           (byte0 :: Word8) <- if recvSz > 0
                             then PM.readByteArray buf 0

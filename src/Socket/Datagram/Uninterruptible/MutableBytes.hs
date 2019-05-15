@@ -18,10 +18,13 @@ module Socket.Datagram.Uninterruptible.MutableBytes
   ) where
 
 import Data.Bytes.Types (MutableBytes)
-import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
+import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import GHC.Exts (RealWorld,proxy#)
-import Socket.IPv4 (Peer,Receipt)
+import Posix.Socket (SocketAddressInternet)
+import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
+import Socket.IPv4 (Peer,Receipt)
+
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected as CR
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Send.Connected as CS
@@ -46,7 +49,7 @@ receive ::
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
 receive (Socket !sock) !buf =
-  CR.receive proxy# sock buf >>= \case
+  CR.receive proxy# sock buf () >>= \case
     Right sz -> pure (Right sz)
     Left err -> pure (Left err)
 
@@ -61,7 +64,9 @@ sendToIPv4 (Socket !sock) !dst !buf =
 receiveFromIPv4 ::
      Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
-  -> IO (Either (ReceiveException 'Uninterruptible) Receipt)
-receiveFromIPv4 (Socket !sock) !buf =
-  V4R.receive proxy# sock buf
+  -> MutablePrimArrayOffset RealWorld SocketAddressInternet
+     -- ^ Buffer for returned peer address
+  -> IO (Either (ReceiveException 'Uninterruptible) Int)
+receiveFromIPv4 (Socket !sock) !buf !addr =
+  V4R.receive proxy# sock buf addr
 
