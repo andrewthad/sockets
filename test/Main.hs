@@ -25,6 +25,7 @@ import Test.Tasty.HUnit
 
 import qualified Data.ByteString as B
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Unlifted.Array as PM
 import qualified Data.Primitive.MVar as PM
 import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4

@@ -8,7 +8,7 @@ module Socket.Stream.Interruptible.Addr
   , receiveBetween
   ) where
 
-import Data.Primitive (Addr)
+import Data.Primitive.Addr (Addr)
 import Control.Concurrent.STM (TVar)
 import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Interruptible))

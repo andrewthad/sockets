@@ -16,16 +16,14 @@ module Socket.Datagram.Interruptible.Bytes
   ) where
 
 import Control.Concurrent.STM (TVar)
-import Data.Bytes.Types (MutableBytes(..),Bytes(..))
-import Data.Bytes.Types (MutableBytes)
-import Data.Kind (Type)
-import Data.Primitive (ByteArray,SmallArray,UnliftedArray)
+import Data.Bytes.Types (MutableBytes(..))
+import Data.Primitive (ByteArray,SmallArray)
+import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
-import GHC.Exts (RealWorld)
 import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
 import Socket.Address (posixToIPv4Peer)
-import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Socket.IPv4 (Peer,Message(..),Receipt(..),Slab(..))
+import Socket.Datagram (Socket(..),ReceiveException)
+import Socket.IPv4 (Message(..),Slab(..))
 
 import qualified Data.Primitive as PM
 import qualified Socket.IPv4

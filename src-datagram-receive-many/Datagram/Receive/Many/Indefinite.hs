@@ -10,9 +10,8 @@ module Datagram.Receive.Many.Indefinite
 
 import Control.Monad.Primitive (primitive)
 import Data.Bytes.Types (MutableBytes(..))
-import Data.Primitive (MutablePrimArray)
-import Data.Primitive (PrimArray,UnliftedArray,MutableByteArray)
-import Data.Primitive (MutableUnliftedArray)
+import Data.Primitive (MutablePrimArray,MutableByteArray)
+import Data.Primitive.Unlifted.Array (MutableUnliftedArray)
 import Data.Word (Word8)
 import Foreign.C.Types (CInt)
 import GHC.Exts (RealWorld,Int(I#))
@@ -25,6 +24,7 @@ import System.Posix.Types (Fd)
 
 import qualified Datagram.Receive as Receive
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Unlifted.Array as PM
 import qualified GHC.Exts as Exts
 import qualified Socket.EventManager as EM
 

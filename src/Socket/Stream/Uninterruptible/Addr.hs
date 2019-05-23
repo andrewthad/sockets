@@ -9,7 +9,7 @@ module Socket.Stream.Uninterruptible.Addr
   , receiveBetween
   ) where
 
-import Data.Primitive (Addr)
+import Data.Primitive.Addr (Addr)
 import GHC.Exts (proxy#)
 import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Uninterruptible))

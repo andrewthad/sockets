@@ -28,7 +28,7 @@ module Socket.Datagram.Uninterruptible.Bytes
 
 import Data.Bytes.Types (Bytes,MutableBytes(..))
 import Data.Primitive (ByteArray,SmallArray)
-import Data.Primitive (UnliftedArray)
+import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
 import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))

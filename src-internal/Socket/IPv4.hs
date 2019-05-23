@@ -24,7 +24,8 @@ module Socket.IPv4
 import Control.Exception (Exception)
 import Control.Monad.Primitive (primitive_,primitive)
 import Data.Kind (Type)
-import Data.Primitive (ByteArray(..),MutableByteArray,MutableUnliftedArray)
+import Data.Primitive.Unlifted.Array (MutableUnliftedArray)
+import Data.Primitive (ByteArray(..),MutableByteArray)
 import Data.Primitive (MutablePrimArray)
 import Data.Primitive (SmallArray,SmallMutableArray)
 import Data.Word (Word16)
@@ -34,6 +35,7 @@ import Net.Types (IPv4(..))
 import Socket.Error (die)
 
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Unlifted.Array as PM
 import qualified Data.Text as T
 import qualified GHC.Exts as Exts
 import qualified Net.IPv4 as IPv4

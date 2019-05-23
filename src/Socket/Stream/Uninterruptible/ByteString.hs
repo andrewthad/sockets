@@ -12,7 +12,8 @@ module Socket.Stream.Uninterruptible.ByteString
 
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.ByteString.Internal (ByteString(PS))
-import Data.Primitive (MutableByteArray(..),Addr(..))
+import Data.Primitive.Addr (Addr(..))
+import Data.Primitive (MutableByteArray(..))
 import Data.Bytes.Types (MutableBytes(..))
 import GHC.Exts (Ptr(Ptr),RealWorld,byteArrayContents#,unsafeCoerce#,proxy#)
 import GHC.ForeignPtr (ForeignPtr(ForeignPtr),ForeignPtrContents(PlainPtr))

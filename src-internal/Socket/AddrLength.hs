@@ -9,14 +9,14 @@ module Socket.AddrLength
 
 import Prelude hiding (length)
 
-import Data.Primitive (Addr)
+import Data.Primitive.Addr (Addr)
 import Posix.Socket (uninterruptibleSend,noSignal)
 import Posix.Socket (uninterruptibleReceive)
 import Foreign.C.Types (CSize)
 import Foreign.C.Error (Errno)
 import System.Posix.Types (Fd)
 
-import qualified Data.Primitive as PM
+import qualified Data.Primitive.Addr as PM
 
 data AddrLength = AddrLength
   {-# UNPACK #-} !Addr -- pointer to first byte

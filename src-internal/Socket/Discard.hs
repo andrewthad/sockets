@@ -17,9 +17,10 @@ module Socket.Discard
   ) where
 
 import Control.Monad.Primitive (primitive,primitive_)
-import Data.Primitive (ByteArray(..),MutableByteArray,MutableUnliftedArray)
-import Data.Primitive (MutablePrimArray)
-import Data.Primitive (SmallArray,SmallMutableArray,UnliftedArray)
+import Data.Primitive (ByteArray(..))
+import Data.Primitive.Unlifted.Array (MutableUnliftedArray,UnliftedArray)
+import Data.Primitive (MutablePrimArray,MutableByteArray)
+import Data.Primitive (SmallArray,SmallMutableArray)
 import Data.Word (Word16)
 import Foreign.C.Types (CInt)
 import GHC.Exts (RealWorld,Int(I#))
@@ -27,6 +28,7 @@ import Socket.Error (die)
 
 import qualified GHC.Exts as Exts
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Unlifted.Array as PM
 
 data Slab = Slab
   { sizes :: !(MutablePrimArray RealWorld CInt)

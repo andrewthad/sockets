@@ -35,13 +35,16 @@ import Control.Monad (when)
 import Control.Monad.STM (atomically)
 import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
 import Data.Bits (unsafeShiftR)
-import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
+import Data.Primitive.Unlifted.Array (MutableUnliftedArray(..))
+import Data.Primitive (MutableByteArray(..),MutablePrimArray(..))
 import Data.Primitive (Prim)
 import Data.Word (Word64,Word32)
 import Foreign.C.Error (Errno(..))
 import Foreign.C.Types (CInt)
-import GHC.Conc.Sync (yield)
-import GHC.Exts (RealWorld,Int(I#),(*#))
+import GHC.Conc.Sync (TVar(..),yield)
+import GHC.Exts (RealWorld,Int(I#),(*#),TVar#,ArrayArray#,MutableArrayArray#)
+import GHC.Exts (Any,MutableArray#,unsafeCoerce#,(==#),isTrue#,casArray#)
+import GHC.IO (IO(..))
 import Numeric (showIntAtBase)
 import Socket.Error (die)
 import Socket.Debug (debug,whenDebugging,debugging)
@@ -53,7 +56,7 @@ import qualified Control.Concurrent.STM as STM
 import qualified Linux.Epoll as Epoll
 import qualified Control.Monad.Primitive as PM
 import qualified Data.Primitive as PM
-import qualified Data.Primitive.Unlifted.Atomic as PM
+import qualified Data.Primitive.Unlifted.Array as PM
 import qualified GHC.Exts as Exts
 
 -- Why write another event manager? GHC ships with the mio event manager,
@@ -166,7 +169,13 @@ manager = unsafePerformIO $ do
   when (not rtsSupportsBoundThreads) $ do
     fail $ "Socket.Event.manager: threaded runtime required"
   !novars <- PM.unsafeNewUnliftedArray 0
-  !variables <- PM.newUnliftedArray 32 novars
+  !variables <- PM.unsafeNewUnliftedArray 32
+  let goX !ix = if ix >= 0
+        then do
+          writeMutableUnliftedArrayArray variables ix novars
+          goX (ix - 1)
+        else pure ()
+  goX 32
   Epoll.uninterruptibleCreate1 Epoll.closeOnExec >>= \case
     Left (Errno code) ->
       die $ "Socket.EventManager.manager: epoll_create error code " ++ show code
@@ -248,7 +257,7 @@ constructivelyLookupTier1 !fd Manager{variables,novars} = do
       -- We ignore the success of casUnliftedArray. It does not actually
       -- matter whether or not it succeeded. If it failed, some other
       -- thread must have initialized the tier 2 arrays.
-      (success,tier2) <- PM.casUnliftedArray variables ixTier1 novars varsAttempt
+      (success,tier2) <- casMutableUnliftedArrayArray variables ixTier1 novars varsAttempt
       debug ("constructivelyLookupTier1: Created tier 2 array of length " ++ show len ++ " at index " ++ show ixTier1 ++ " with success " ++ show success)
       pure (ixTier2,tier2)
     else pure (ixTier2,varsTier2)
@@ -641,34 +650,39 @@ newPinnedPrimArray (I# n#)
   = PM.primitive (\s# -> case Exts.newPinnedByteArray# (n# *# PM.sizeOf# (undefined :: a)) s# of
       (# s'#, arr# #) -> (# s'#, MutablePrimArray arr# #))
 
--- For some reason, GHC fails to inline readUnliftedArray correctly.
--- So, we manually specialize it here.
-readTVarArray                                                           
-  :: MutableUnliftedArray RealWorld (TVar a) -- ^ source                       
-  -> Int -- ^ index                                                         
+-- This can be unsound if the result is passed to the FFI. Fortunately,
+-- we do not do that with the result.
+readTVarArray :: forall a.
+     MutableUnliftedArray RealWorld (TVar a) -- ^ source
+  -> Int -- ^ index
   -> IO (TVar a)
 readTVarArray (MutableUnliftedArray maa#) (I# i#)                       
   = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of                
-      (# s', aa# #) -> (# s',  PM.fromArrayArray# aa# #)                       
-
--- For some reason, GHC fails to inline readUnliftedArray correctly.
--- So, we manually specialize it here.
-readMutableUnliftedArrayArray
+      (# s', aa# #) -> (# s', TVar ((unsafeCoerce# :: ArrayArray# -> TVar# RealWorld a) aa#) #)                       
+readMutableUnliftedArrayArray                                                           
   :: MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ source
   -> Int -- ^ index
   -> IO (MutableUnliftedArray RealWorld a)
-readMutableUnliftedArrayArray (MutableUnliftedArray maa#) (I# i#)
-  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of
-      (# s', aa# #) -> (# s',  PM.fromArrayArray# aa# #)
+readMutableUnliftedArrayArray (MutableUnliftedArray maa#) (I# i#)                       
+  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of                
+      (# s', aa# #) -> (# s', MutableUnliftedArray ((unsafeCoerce# :: ArrayArray# -> MutableArrayArray# RealWorld) aa#) #)                       
 
 -- See readTVarArray
-writeTVarArray
-  :: MutableUnliftedArray RealWorld (TVar a) -- ^ destination
+writeTVarArray :: forall a.
+     MutableUnliftedArray RealWorld (TVar a) -- ^ destination
   -> Int -- ^ index
   -> TVar a -- ^ value
   -> IO ()
-writeTVarArray (PM.MutableUnliftedArray maa#) (I# i#) a
-  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# (PM.toArrayArray# a))
+writeTVarArray (PM.MutableUnliftedArray maa#) (I# i#) (TVar a)
+  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# ((unsafeCoerce# :: TVar# RealWorld a -> ArrayArray#) a))
+
+writeMutableUnliftedArrayArray :: forall a.
+     MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ source
+  -> Int -- ^ index
+  -> MutableUnliftedArray RealWorld a -- ^ value
+  -> IO ()
+writeMutableUnliftedArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (MutableUnliftedArray a)
+  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# ((unsafeCoerce# :: MutableArrayArray# RealWorld -> ArrayArray#) a))
 
 -- [Notes on registration]
 -- This interface requires every call to @register@ to be paired with
@@ -737,24 +751,21 @@ writeTVarArray (PM.MutableUnliftedArray maa#) (I# i#) a
 -- These interpretations suggest that logical disjunction will give 
 -- us the current readiness of the channel.
 
+casMutableUnliftedArrayArray ::
+     MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ array
+  -> Int -- ^ index
+  -> (MutableUnliftedArray RealWorld a) -- ^ expected old value
+  -> (MutableUnliftedArray RealWorld a) -- ^ new value
+  -> IO (Bool,MutableUnliftedArray RealWorld a)
+{-# INLINE casMutableUnliftedArrayArray #-}
+casMutableUnliftedArrayArray (MutableUnliftedArray arr#) (I# i#) (MutableUnliftedArray old) (MutableUnliftedArray new) =
+  -- All of this unsafeCoercing is really nasty business. This will go away
+  -- once https://github.com/ghc-proposals/ghc-proposals/pull/203 happens.
+  -- Also, this is unsound if the result is immidiately consumed by
+  -- the FFI.
+  IO $ \s0 ->
+    let !uold = (unsafeCoerce# :: MutableArrayArray# RealWorld -> Any) old
+        !unew = (unsafeCoerce# :: MutableArrayArray# RealWorld -> Any) new
+     in case casArray# ((unsafeCoerce# :: MutableArrayArray# RealWorld -> MutableArray# RealWorld Any) arr#) i# uold unew s0 of
+          (# s1, n, ur #) -> (# s1, (isTrue# (n ==# 0# ),MutableUnliftedArray ((unsafeCoerce# :: Any -> MutableArrayArray# RealWorld) ur)) #)
 
--- This poll code is no longer needed.
--- pollSingle :: Fd -> IO (Bool,Bool)
--- pollSingle !fd = do
---   pfds <- PM.newPrimArray 1
---   PM.writePrimArray pfds 0 $ Poll.PollFd
---     { Poll.descriptor = fd
---     , Poll.request = Poll.input <> Poll.output
---     , Poll.response = mempty
---     }
---   Poll.uninterruptiblePollMutablePrimArray pfds 0 >>= \case
---     Left (Errno e) -> fail ("Socket.EventManager.pollSingle: error code " ++ show e)
---     Right _ -> do
---       -- We actually do not care about the return value of poll.
---       -- Looking in the revents field will tell us what we care
---       -- about anyway.
---       Poll.PollFd{Poll.response} <- PM.readPrimArray pfds 0
---       pure
---         ( Poll.isSubeventOf Poll.input response
---         , Poll.isSubeventOf Poll.output response
---         )

@@ -29,6 +29,9 @@ module Socket.Datagram.IPv4.Spoof
   , SendException(..)
   ) where
 
+-- TODO: Figure out what to do with this module. It should probably
+-- be moved to another library.
+
 import Control.Concurrent (threadWaitWrite)
 import Control.Exception (Exception,throwIO,mask,onException)
 import Data.Bits (unsafeShiftR,complement,(.&.))
@@ -48,6 +51,7 @@ import System.Posix.Types (Fd)
 import Text.Printf (printf)
 
 import qualified Data.Primitive as PM
+import qualified Data.Primitive.Addr as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified GHC.Exts as E
 import qualified Linux.Socket as L
@@ -122,7 +126,7 @@ sendMutableByteArray (Socket !s) !theSource !theRemote !thePayload !off !len = d
   -- checksum. But, if the original length was odd, it does get used.
   buf <- PM.newPinnedByteArray (totalPacketSz + 1)
   PM.setByteArray buf 0 (totalPacketSz + 1) (0 :: Word8)
-  let addr = PM.mutableByteArrayContents buf
+  let addr = ptrToAddr (PM.mutableByteArrayContents buf)
   L.pokeIpHeaderVersionIhl addr (4 * 16 + 5)
   L.pokeIpHeaderTypeOfService addr 0
   -- TODO: Actually check the length.
@@ -287,4 +291,7 @@ handleSendException func e
       moduleSocketDatagramIPv4Spoof
       func
       [describeErrorCode e]
+
+ptrToAddr :: E.Ptr a -> PM.Addr
+ptrToAddr (E.Ptr x) = PM.Addr x
 

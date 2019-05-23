@@ -82,14 +82,15 @@ library sockets-internal
     , ip >= 1.4.1
     , posix-api >= 0.2.1
     , primitive-offset >= 0.1 && <0.2
-    , primitive-atomic >= 0.1 && <0.2
+    , primitive-unlifted >= 0.1 && <0.2
+    , primitive-addr >= 0.1 && <0.2
     , stm >= 2.4
     , text >= 1.2
     , byteslice >=0.1 && <0.2
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   exposed-modules:
     Socket
     Socket.AddrLength
@@ -126,7 +127,7 @@ library sockets-internal
 library sockets-interrupt
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
     , sockets-internal
   signatures: Socket.Interrupt
@@ -144,7 +145,7 @@ library sockets-buffer
 library sockets-datagram-send
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , posix-api >= 0.2.1
     , stm >= 2.4
     , sockets-internal
@@ -161,7 +162,7 @@ library sockets-datagram-send
 library sockets-datagram-receive
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
     , posix-api >= 0.2.1
     , primitive-offset >= 0.1 && <0.2
@@ -182,16 +183,17 @@ library sockets-datagram-receive
 library sockets-datagram-receive-many
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
     , posix-api >= 0.2.1
+    , primitive-unlifted >= 0.1 && <0.2
     , byteslice >= 0.1.0.0
     , sockets-datagram-receive
     , sockets-internal
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   exposed-modules:
     Datagram.Receive.Many.Indefinite
   hs-source-dirs: src-datagram-receive-many
@@ -206,7 +208,7 @@ library sockets-datagram-receive-many
 library sockets-stream-send
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , posix-api >= 0.2.1
     , stm >= 2.4
     , sockets-internal
@@ -223,7 +225,7 @@ library sockets-stream-send
 library sockets-stream-receive
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , posix-api >= 0.2.1
     , stm >= 2.4
     , sockets-internal
@@ -243,7 +245,7 @@ library sockets-stream-receive
 library sockets-stream-bidirectional
   build-depends:
     , base >= 4.11.1.0 && <5
-    , error-codes >= 0.1 && < 0.2
+    , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
     , sockets-internal
     , sockets-stream-send
@@ -405,11 +407,12 @@ library
     , base >= 4.11.1.0 && <5
     , byteslice >=0.1 && <0.2
     , bytestring >=0.10 && <0.11
-    , error-codes >=0.1 && <0.2
+    , error-codes >=0.1.0.1 && <0.2
     , ip >=1.4.1
     , posix-api >=0.2.1
-    , primitive-atomic
+    , primitive-addr >= 0.1 && <0.2
     , primitive-offset >= 0.1 && <0.2
+    , primitive-unlifted >= 0.1 && <0.2
     , sockets-datagram-receive
     , sockets-datagram-receive-many
     , sockets-datagram-send
@@ -421,7 +424,7 @@ library
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   hs-source-dirs: src
   if flag(mmsg)
     hs-source-dirs: src-mmsg
@@ -443,10 +446,11 @@ test-suite test
     , async
     , bytestring
     , byteslice
+    , primitive-unlifted
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
 
@@ -461,7 +465,7 @@ benchmark macro
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -478,7 +482,7 @@ benchmark http
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
-    build-depends: primitive >= 0.6.4 && <0.7
+    build-depends: primitive >= 0.7 && <0.8
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -495,7 +499,7 @@ executable sockets-example
     if flag(checked)
       build-depends: primitive-checked >= 0.6.4.3
     else
-      build-depends: primitive >= 0.6.4 && <0.7
+      build-depends: primitive >= 0.7 && <0.8
   else
     buildable: False
   hs-source-dirs: example
