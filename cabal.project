@@ -1,13 +1,5 @@
 packages: .
 source-repository-package
   type: git
-  location: https://github.com/andrewthad/byteslice
-  tag: a383cb69e575b0553cf3f625d0eb5ceaed13c1ea
-source-repository-package
-  type: git
   location: https://github.com/andrewthad/posix-api
-  tag: 64cc5be9d0bc01792dea5c1060e07df003d1ff72
-source-repository-package
-  type: git
-  location: https://github.com/andrewthad/primitive-atomic
-  tag: ce41af0d7b0871070205925afa1a432ac284adec
+  tag: 7033b2ac7bbd0fb58bc5339ef5ff57382b154a8e

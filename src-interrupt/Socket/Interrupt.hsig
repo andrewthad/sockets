@@ -1,0 +1,24 @@
+{-# language DataKinds #-}
+{-# language KindSignatures #-}
+
+signature Socket.Interrupt where
+
+import Prelude (IO,Either)
+
+import Control.Concurrent.STM (TVar)
+import Socket.EventManager (Token)
+import Socket (Interruptibility)
+import GHC.Exts (RuntimeRep,TYPE)
+import qualified Socket.Stream as Stream
+import qualified Socket.Datagram as Datagram
+
+data InterruptRep :: RuntimeRep
+data Interrupt :: TYPE InterruptRep
+data Intr :: Interruptibility
+
+wait :: Interrupt -> TVar Token -> IO Token
+
+tokenToStreamSendException :: Token -> Either (Stream.SendException Intr) ()
+tokenToStreamReceiveException :: Token -> Either (Stream.ReceiveException Intr) ()
+tokenToDatagramSendException :: Token -> Either (Datagram.SendException Intr) ()
+tokenToDatagramReceiveException :: Token -> Either (Datagram.ReceiveException Intr) ()

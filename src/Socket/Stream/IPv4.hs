@@ -13,7 +13,7 @@ module Socket.Stream.IPv4
   ( -- * Types
     Listener
   , Connection
-  , Endpoint(..)
+  , Peer(..)
     -- * Bracketed
   , withListener
   , withAccepted
@@ -58,8 +58,9 @@ import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
 import Socket (SocketUnrecoverableException(..))
 import Socket (cgetsockname,cclose)
+import Socket.Error (die)
 import Socket.Debug (debug)
-import Socket.IPv4 (Endpoint(..),describeEndpoint)
+import Socket.IPv4 (Peer(..),describeEndpoint)
 import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
 import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import Socket.Stream (Connection(..))
@@ -89,8 +90,8 @@ newtype Listener = Listener Fd
 -- Noncompliant use of this function leads to undefined behavior. Prefer
 -- 'withListener' unless you are writing an integration with a
 -- resource-management library.
-listen :: Endpoint -> IO (Either SocketException (Listener, Word16))
-listen endpoint@Endpoint{port = specifiedPort} = do
+listen :: Peer -> IO (Either SocketException (Listener, Word16))
+listen endpoint@Peer{port = specifiedPort} = do
   debug ("listen: opening listen " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
@@ -105,7 +106,7 @@ listen endpoint@Endpoint{port = specifiedPort} = do
       case e2 of
         Left err -> do
           _ <- S.uninterruptibleClose fd
-          handleBindListenException specifiedPort SCK.functionWithListener err
+          handleBindListenException specifiedPort err
         Right _ -> S.uninterruptibleListen fd 16 >>= \case
           -- We hardcode the listen backlog to 16. The author is unfamiliar
           -- with use cases where gains are realized from tuning this parameter.
@@ -113,7 +114,7 @@ listen endpoint@Endpoint{port = specifiedPort} = do
           Left err -> do
             _ <- S.uninterruptibleClose fd
             debug "listen: listen failed with error code"
-            handleBindListenException specifiedPort SCK.functionWithListener err
+            handleBindListenException specifiedPort err
           Right _ -> do
             -- The getsockname is copied from code in Socket.Datagram.IPv4.Undestined.
             -- Consider factoring this out.
@@ -168,7 +169,7 @@ unlisten_ :: Listener -> IO ()
 unlisten_ (Listener fd) = S.uninterruptibleErrorlessClose fd
 
 withListener ::
-     Endpoint
+     Peer
   -> (Listener -> Word16 -> IO a)
   -> IO (Either SocketException a)
 withListener endpoint f = mask $ \restore -> do
@@ -182,7 +183,7 @@ withListener endpoint f = mask $ \restore -> do
       pure (Right a)
 
 -- | Listen for an inbound connection.
-accept :: Listener -> IO (Either (AcceptException 'Uninterruptible) (Connection,Endpoint))
+accept :: Listener -> IO (Either (AcceptException 'Uninterruptible) (Connection,Peer))
 accept (Listener !fd) = do
   -- Although this function must be called in a context where
   -- exceptions are masked, recall that EM.wait uses an STM
@@ -214,7 +215,7 @@ interruptibleAccept ::
      -- ^ Interrupted. If this becomes 'True' give up and return
      --   @'Left' 'AcceptInterrupted'@.
   -> Listener
-  -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
+  -> IO (Either (AcceptException 'Interruptible) (Connection,Peer))
 interruptibleAccept !abandon (Listener fd) = do
   -- TODO: pull these out of the loop
   let !mngr = EM.manager
@@ -237,7 +238,7 @@ interruptibleAcceptCounting ::
      TVar Int
   -> TVar Bool
   -> Listener
-  -> IO (Either (AcceptException 'Interruptible) (Connection,Endpoint))
+  -> IO (Either (AcceptException 'Interruptible) (Connection,Peer))
 interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
   -- TODO: pull these out of the loop
   let !mngr = EM.manager
@@ -256,10 +257,10 @@ interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
         pure (Right r)
 
 -- We use the maybe to mean that the user needs to wait again.
-waitlessAccept :: Fd -> IO (Either (Maybe (AcceptException i)) (Connection,Endpoint))
+waitlessAccept :: Fd -> IO (Either (Maybe (AcceptException i)) (Connection,Peer))
 waitlessAccept lstn = do
   L.uninterruptibleAccept4 lstn S.sizeofSocketAddressInternet (L.closeOnExec <> L.nonblocking) >>= \case
-    Left err -> handleAcceptException "waitlessAccept" err
+    Left err -> handleAcceptException err
     Right (sockAddrRequiredSz,sockAddr,acpt) -> if sockAddrRequiredSz == S.sizeofSocketAddressInternet
       then case S.decodeSocketAddressInternet sockAddr of
         Just sockAddrInet -> do
@@ -350,7 +351,7 @@ withAccepted ::
      Listener
   -> (Either CloseException () -> a -> IO b)
      -- ^ Callback to handle an ungraceful close. 
-  -> (Connection -> Endpoint -> IO a)
+  -> (Connection -> Peer -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) b)
 withAccepted lstn@(Listener lstnFd) consumeException cb = do
@@ -375,7 +376,7 @@ forkAccepted ::
      Listener
   -> (Either CloseException () -> a -> IO ())
      -- ^ Callback to handle an ungraceful close. 
-  -> (Connection -> Endpoint -> IO a)
+  -> (Connection -> Peer -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
 forkAccepted lstn consumeException cb =
@@ -393,7 +394,7 @@ forkAcceptedUnmasked ::
      Listener
   -> (Either CloseException () -> a -> IO ())
      -- ^ Callback to handle an ungraceful close. 
-  -> (Connection -> Endpoint -> IO a)
+  -> (Connection -> Peer -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Uninterruptible) ThreadId)
 forkAcceptedUnmasked lstn consumeException cb =
@@ -466,7 +467,7 @@ interruptibleForkAcceptedUnmasked ::
      -- ^ Connection listener
   -> (Either CloseException () -> a -> IO ())
      -- ^ Callback to handle an ungraceful close. 
-  -> (Connection -> Endpoint -> IO a)
+  -> (Connection -> Peer -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Interruptible) ThreadId)
 interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
@@ -499,7 +500,7 @@ interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
 -- 'withConnection' unless you are writing an integration with a
 -- resource-management library.
 connect ::
-     Endpoint
+     Peer
      -- ^ Remote endpoint
   -> IO (Either (ConnectException 'Uninterruptible) Connection)
 connect !remote = do
@@ -543,7 +544,7 @@ connect !remote = do
 --      TVar Bool
 --      -- ^ Interrupted. If this becomes 'True', give up and return
 --      --   @'Left' 'AcceptInterrupted'@.
---   -> Endpoint
+--   -> Peer
 --      -- ^ Remote endpoint
 --   -> IO (Either (ConnectException 'Interruptible) Connection)
 -- interruptibleConnect !abandon !remote = do
@@ -563,7 +564,7 @@ connect !remote = do
 -- Internal function called by both connect and interruptibleConnect
 -- before the connection is established. Creates the socket and prepares
 -- the sockaddr.
-beforeEstablishment :: Endpoint -> IO (Either (ConnectException i) (Fd,S.SocketAddress))
+beforeEstablishment :: Peer -> IO (Either (ConnectException i) (Fd,S.SocketAddress))
 {-# INLINE beforeEstablishment #-}
 beforeEstablishment !remote = do
   debug ("beforeEstablishment: opening connection " ++ show remote)
@@ -640,7 +641,7 @@ disconnect_ (Connection fd) = S.uninterruptibleErrorlessClose fd
 
 -- | Establish a connection to a server.
 withConnection ::
-     Endpoint
+     Peer
      -- ^ Remote endpoint
   -> (Either CloseException () -> a -> IO b)
      -- ^ Callback to handle an ungraceful close. 
@@ -656,14 +657,14 @@ withConnection !remote g f = mask $ \restore -> do
       b <- g m a
       pure (Right b)
     
-endpointToSocketAddressInternet :: Endpoint -> S.SocketAddressInternet
-endpointToSocketAddressInternet (Endpoint {address, port}) = S.SocketAddressInternet
+endpointToSocketAddressInternet :: Peer -> S.SocketAddressInternet
+endpointToSocketAddressInternet (Peer {address, port}) = S.SocketAddressInternet
   { port = S.hostToNetworkShort port
   , address = S.hostToNetworkLong (getIPv4 address)
   }
 
-socketAddressInternetToEndpoint :: S.SocketAddressInternet -> Endpoint
-socketAddressInternetToEndpoint (S.SocketAddressInternet {address,port}) = Endpoint
+socketAddressInternetToEndpoint :: S.SocketAddressInternet -> Peer
+socketAddressInternetToEndpoint (S.SocketAddressInternet {address,port}) = Peer
   { address = IPv4 (S.networkToHostLong address)
   , port = S.networkToHostShort port
   }
@@ -734,32 +735,30 @@ handleSocketListenException func e
 -- to be the error codes we are interested in.
 --
 -- NB: EACCES only happens on @bind@, not on @listen@.
-handleBindListenException :: Word16 -> String -> Errno -> IO (Either SocketException a)
-handleBindListenException !thePort func !e
+handleBindListenException ::
+     Word16
+  -> Errno
+  -> IO (Either SocketException a)
+handleBindListenException !thePort !e
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
       then pure (Left SocketAddressInUse)
       else pure (Left SocketEphemeralPortsExhausted)
-  | otherwise = throwIO $ SocketUnrecoverableException
-      moduleSocketStreamIPv4
-      func
-      [describeErrorCode e]
+  | otherwise = die
+      ("Socket.Stream.IPv4.bindListen: " ++ describeErrorCode e)
 
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to open a connection (not listen for inbound connections).
-handleAcceptException :: String -> Errno -> IO (Either (Maybe (AcceptException i)) a)
-handleAcceptException func e
+handleAcceptException :: Errno -> IO (Either (Maybe (AcceptException i)) a)
+handleAcceptException e
   | e == eAGAIN = pure (Left Nothing)
   | e == eWOULDBLOCK = pure (Left Nothing)
   | e == eCONNABORTED = pure (Left (Just AcceptConnectionAborted))
   | e == eMFILE = pure (Left (Just AcceptFileDescriptorLimit))
   | e == eNFILE = pure (Left (Just AcceptFileDescriptorLimit))
   | e == ePERM = pure (Left (Just AcceptFirewalled))
-  | otherwise = throwIO $ SocketUnrecoverableException
-      moduleSocketStreamIPv4
-      func
-      [describeErrorCode e]
+  | otherwise = die ("Socket.Stream.IPv4.accept: " ++ describeErrorCode e)
 
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"

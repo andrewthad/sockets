@@ -1,0 +1,21 @@
+signature Stream.Communication where
+
+import Control.Concurrent.STM (TVar)
+import Foreign.C.Error (Errno)
+import Foreign.C.Types (CSize)
+import GHC.Exts (RuntimeRep,TYPE)
+import Prelude (Either,IO,Int)
+import Socket (Interruptibility)
+import Socket.EventManager (Token)
+import System.Posix.Types (Fd)
+
+import qualified Socket.Stream as Stream
+import qualified Socket.Datagram as Datagram
+
+data Buffer
+
+advance :: Buffer -> Int -> Buffer
+length :: Buffer -> Int
+
+sendOnce :: Fd -> Buffer -> IO (Either Errno CSize)
+receiveOnce :: Fd -> Buffer -> IO (Either Errno CSize)

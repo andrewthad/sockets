@@ -66,6 +66,11 @@ flag debug
   description: Print debug output 
   default: False
 
+flag checked
+  manual: True
+  description: Add bounds-checking to primitive array operations
+  default: False
+
 flag example
   manual: True
   description: Build example executables
@@ -76,24 +81,36 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , ip >= 1.4.1
     , posix-api >= 0.2.1
-    , primitive >= 0.6.4
+    , primitive-offset >= 0.1 && <0.2
     , primitive-atomic >= 0.1 && <0.2
     , stm >= 2.4
     , text >= 1.2
     , byteslice >=0.1 && <0.2
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
   exposed-modules:
     Socket
     Socket.AddrLength
+    Socket.Datagram
     Socket.Debug
     Socket.Error
     Socket.EventManager
     Socket.IPv4
     Socket.Stream
-    Socket.Stream.Addr
-    Socket.Stream.Bytes
-    Socket.Stream.MutableBytes
-    Socket.Stream.Interruptible
-    Socket.Stream.Uninterruptible
+    Socket.Bytes
+    Socket.Destined.IPv4.MutableBytes
+    Socket.Destined.IPv4.Bytes
+    Socket.Peerless
+    Socket.Discard
+    Socket.Connected.MutableBytes
+    Socket.Connected.Bytes
+    Socket.MutableBytes
+    Socket.MutableBytes.Peerless
+    Socket.MutableBytes.SocketAddressInternet
+    Socket.Interruptible
+    Socket.Uninterruptible
   if flag(debug)
     hs-source-dirs: src-debug
   else
@@ -106,16 +123,83 @@ library sockets-internal
   default-language: Haskell2010
   ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
-library sockets-stream
+library sockets-interrupt
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1 && < 0.2
     , stm >= 2.4
     , sockets-internal
+  signatures: Socket.Interrupt
+  hs-source-dirs: src-interrupt
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-buffer
+  build-depends: base >= 4.11.1.0 && <5
+  signatures: Socket.Buffer
+  hs-source-dirs: src-buffer
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-datagram-send
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , posix-api >= 0.2.1
+    , stm >= 2.4
+    , sockets-internal
+    , sockets-buffer
+    , sockets-interrupt
+  exposed-modules:
+    Datagram.Send.Indefinite
   signatures:
-    Stream.Interrupt
-    Stream.Buffer
-  hs-source-dirs: src-stream
+    Datagram.Send
+  hs-source-dirs: src-datagram-send
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-datagram-receive
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , posix-api >= 0.2.1
+    , primitive-offset >= 0.1 && <0.2
+    , sockets-internal
+    , sockets-buffer
+    , sockets-interrupt
+  exposed-modules:
+    Datagram.Receive.Indefinite
+  signatures:
+    Datagram.Receive
+  hs-source-dirs: src-datagram-receive
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+-- This is only used as a shim for when the platform does not
+-- support recvmmsg. It lets us share code for the interruptible
+-- and uninterruptible variants.
+library sockets-datagram-receive-many
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , posix-api >= 0.2.1
+    , byteslice >= 0.1.0.0
+    , sockets-datagram-receive
+    , sockets-internal
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
+  exposed-modules:
+    Datagram.Receive.Many.Indefinite
+  hs-source-dirs: src-datagram-receive-many
+  mixins:
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Instantiate)
+      requires
+      (Socket.Buffer as Socket.MutableBytes)
   default-language: Haskell2010
   ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
@@ -123,9 +207,11 @@ library sockets-stream-send
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1 && < 0.2
+    , posix-api >= 0.2.1
     , stm >= 2.4
     , sockets-internal
-    , sockets-stream
+    , sockets-buffer
+    , sockets-interrupt
   exposed-modules:
     Stream.Send.Indefinite
   signatures:
@@ -138,9 +224,11 @@ library sockets-stream-receive
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1 && < 0.2
+    , posix-api >= 0.2.1
     , stm >= 2.4
     , sockets-internal
-    , sockets-stream
+    , sockets-buffer
+    , sockets-interrupt
   exposed-modules:
     Stream.Receive.Indefinite
   signatures:
@@ -149,11 +237,34 @@ library sockets-stream-receive
   default-language: Haskell2010
   ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 
+-- Here, we partially apply the indefinite packages for
+-- stream send and stream receive. The avoids duplication
+-- in the public library.
+library sockets-stream-bidirectional
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1 && < 0.2
+    , stm >= 2.4
+    , sockets-internal
+    , sockets-stream-send
+    , sockets-stream-receive
+  reexported-modules:
+    , Stream.Send.Indefinite
+    , Stream.Receive.Indefinite
+  mixins:
+      sockets-stream-send (Stream.Send.Indefinite)
+    , sockets-stream-receive (Stream.Receive.Indefinite)
+
 library
   exposed-modules:
+    Socket.Address
     Socket.Datagram.IPv4.Spoof
-    Socket.Datagram.IPv4.Undestined
+    Socket.Datagram.IPv4.Unconnected
     Socket.Stream.IPv4
+    Socket.Datagram.Interruptible.Bytes
+    Socket.Datagram.Interruptible.MutableBytes
+    Socket.Datagram.Uninterruptible.Bytes
+    Socket.Datagram.Uninterruptible.MutableBytes
     Socket.Stream.Interruptible.Addr
     Socket.Stream.Interruptible.ByteString
     Socket.Stream.Interruptible.Bytes
@@ -163,70 +274,133 @@ library
     Socket.Stream.Uninterruptible.Bytes
     Socket.Stream.Uninterruptible.MutableBytes
   other-modules:
-    Socket.Datagram
-    Socket.Datagram.IPv4.Undestined.Multiple
-    Socket.Datagram.IPv4.Undestined.Internal
+    Socket.Datagram.Interruptible.MutableBytes.Many
+    Socket.Datagram.Uninterruptible.MutableBytes.Many
   mixins:
+    sockets-datagram-receive-many
+      (Datagram.Receive.Many.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.Unit)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.Peerless,
+       Socket.Interrupt as Socket.Uninterruptible),
+    sockets-datagram-receive-many
+      (Datagram.Receive.Many.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.IPv4)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Uninterruptible),
+    sockets-datagram-receive-many
+      (Datagram.Receive.Many.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Many.Unit)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.Peerless,
+       Socket.Interrupt as Socket.Interruptible),
+    sockets-datagram-receive-many
+      (Datagram.Receive.Many.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Many.IPv4)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Interruptible),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Send.IPv4)
+      requires
+      (Datagram.Send as Socket.Destined.IPv4.MutableBytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.Bytes.Send.Connected)
+      requires
+      (Datagram.Send as Socket.Connected.Bytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.Bytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.Bytes.Send.IPv4)
+      requires
+      (Datagram.Send as Socket.Destined.IPv4.Bytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.Bytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Send.IPv4)
+      requires
+      (Datagram.Send as Socket.Destined.IPv4.MutableBytes,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Send.Connected)
+      requires
+      (Datagram.Send as Socket.Connected.MutableBytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Send.Connected)
+      requires
+      (Datagram.Send as Socket.Connected.MutableBytes,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.IPv4)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.IPv4)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.Peerless,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.Connected)
+      requires
+      (Datagram.Receive as Socket.MutableBytes.Peerless,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.MutableBytes),
     sockets-stream-send
       (Stream.Send.Indefinite as Socket.Stream.Interruptible.Bytes.Send)
       requires
-      (Stream.Send as Socket.Stream.Bytes,
-       Stream.Interrupt as Socket.Stream.Interruptible,
-       Stream.Buffer as Socket.Stream.Bytes),
+      (Stream.Send as Socket.Bytes,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.Bytes),
     sockets-stream-send
       (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Bytes.Send)
       requires
-      (Stream.Send as Socket.Stream.Bytes,
-       Stream.Interrupt as Socket.Stream.Uninterruptible,
-       Stream.Buffer as Socket.Stream.Bytes),
-    sockets-stream-send
-      (Stream.Send.Indefinite as Socket.Stream.Interruptible.MutableBytes.Send)
+      (Stream.Send as Socket.Bytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.Bytes),
+    sockets-stream-bidirectional
+      (Stream.Send.Indefinite as Socket.Stream.Interruptible.MutableBytes.Send,
+       Stream.Receive.Indefinite as Socket.Stream.Interruptible.MutableBytes.Receive)
       requires
-      (Stream.Send as Socket.Stream.MutableBytes,
-       Stream.Interrupt as Socket.Stream.Interruptible,
-       Stream.Buffer as Socket.Stream.MutableBytes),
-    sockets-stream-receive
-      (Stream.Receive.Indefinite as Socket.Stream.Interruptible.MutableBytes.Receive)
+      (Stream.Send as Socket.MutableBytes,
+       Stream.Receive as Socket.MutableBytes,
+       Socket.Buffer as Socket.MutableBytes,
+       Socket.Interrupt as Socket.Interruptible),
+    sockets-stream-bidirectional
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Send,
+       Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Receive)
       requires
-      (Stream.Receive as Socket.Stream.MutableBytes,
-       Stream.Interrupt as Socket.Stream.Interruptible,
-       Stream.Buffer as Socket.Stream.MutableBytes),
-    sockets-stream-send
-      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Send)
+      (Stream.Send as Socket.MutableBytes,
+       Stream.Receive as Socket.MutableBytes,
+       Socket.Buffer as Socket.MutableBytes,
+       Socket.Interrupt as Socket.Uninterruptible),
+    sockets-stream-bidirectional
+      (Stream.Send.Indefinite as Socket.Stream.Interruptible.Addr.Send,
+       Stream.Receive.Indefinite as Socket.Stream.Interruptible.Addr.Receive)
       requires
-      (Stream.Send as Socket.Stream.MutableBytes,
-       Stream.Interrupt as Socket.Stream.Uninterruptible,
-       Stream.Buffer as Socket.Stream.MutableBytes),
-    sockets-stream-receive
-      (Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Receive)
+      (Stream.Send as Socket.AddrLength,
+       Stream.Receive as Socket.AddrLength,
+       Socket.Buffer as Socket.AddrLength,
+       Socket.Interrupt as Socket.Interruptible),
+    sockets-stream-bidirectional
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Addr.Send,
+       Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.Addr.Receive)
       requires
-      (Stream.Receive as Socket.Stream.MutableBytes,
-       Stream.Interrupt as Socket.Stream.Uninterruptible,
-       Stream.Buffer as Socket.Stream.MutableBytes),
-    sockets-stream-send
-      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Addr.Send)
-      requires
-      (Stream.Send as Socket.Stream.Addr,
-       Stream.Interrupt as Socket.Stream.Uninterruptible,
-       Stream.Buffer as Socket.Stream.Addr),
-    sockets-stream-receive
-      (Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.Addr.Receive)
-      requires
-      (Stream.Receive as Socket.Stream.Addr,
-       Stream.Interrupt as Socket.Stream.Uninterruptible,
-       Stream.Buffer as Socket.Stream.Addr),
-    sockets-stream-send
-      (Stream.Send.Indefinite as Socket.Stream.Interruptible.Addr.Send)
-      requires
-      (Stream.Send as Socket.Stream.Addr,
-       Stream.Interrupt as Socket.Stream.Interruptible,
-       Stream.Buffer as Socket.Stream.Addr),
-    sockets-stream-receive
-      (Stream.Receive.Indefinite as Socket.Stream.Interruptible.Addr.Receive)
-      requires
-      (Stream.Receive as Socket.Stream.Addr,
-       Stream.Interrupt as Socket.Stream.Interruptible,
-       Stream.Buffer as Socket.Stream.Addr)
+      (Stream.Send as Socket.AddrLength,
+       Stream.Receive as Socket.AddrLength,
+       Socket.Buffer as Socket.AddrLength,
+       Socket.Interrupt as Socket.Uninterruptible),
   build-depends:
     , base >= 4.11.1.0 && <5
     , byteslice >=0.1 && <0.2
@@ -234,13 +408,20 @@ library
     , error-codes >=0.1 && <0.2
     , ip >=1.4.1
     , posix-api >=0.2.1
-    , primitive >=0.6.4
     , primitive-atomic
-    , sockets-stream-send
-    , sockets-stream-receive
+    , primitive-offset >= 0.1 && <0.2
+    , sockets-datagram-receive
+    , sockets-datagram-receive-many
+    , sockets-datagram-send
     , sockets-internal
+    , sockets-stream-bidirectional
+    , sockets-stream-send
     , stm >=2.4
     , text >=1.2
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
   hs-source-dirs: src
   if flag(mmsg)
     hs-source-dirs: src-mmsg
@@ -259,10 +440,13 @@ test-suite test
     , tasty
     , tasty-hunit
     , ip >= 1.4.1
-    , primitive >= 0.6.4
     , async
     , bytestring
     , byteslice
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
   ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
 
@@ -272,9 +456,12 @@ benchmark macro
     , base >= 4.11.1.0 && < 5
     , sockets
     , ip >= 1.4.1
-    , primitive >= 0.6.4
     , bytestring >= 0.10.8.2
     , entropy >= 0.4.1.4
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -286,9 +473,12 @@ benchmark http
     , base >= 4.11.1.0 && < 5
     , sockets
     , ip >= 1.4.1
-    , primitive >= 0.6.4
     , bytestring >= 0.10.8.2
     , byteslice >= 0.1
+  if flag(checked)
+    build-depends: primitive-checked >= 0.6.4.3
+  else
+    build-depends: primitive >= 0.6.4
   ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
@@ -300,9 +490,12 @@ executable sockets-example
       , base >= 4.11.1.0 && < 5
       , sockets
       , ip >= 1.4.1
-      , primitive >= 0.6.4
       , bytestring >= 0.10.8.2
       , fast-logger >= 2.4.13
+    if flag(checked)
+      build-depends: primitive-checked >= 0.6.4.3
+    else
+      build-depends: primitive >= 0.6.4
   else
     buildable: False
   hs-source-dirs: example

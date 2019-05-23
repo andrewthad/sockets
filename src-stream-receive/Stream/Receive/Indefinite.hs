@@ -19,13 +19,13 @@ import GHC.IO (IO(IO))
 import Socket.Error (die)
 import Socket.EventManager (Token)
 import Socket.Stream (ReceiveException(..),Connection(..))
-import Stream.Buffer (Buffer)
-import Stream.Interrupt (Interrupt,Intr,wait,tokenToReceiveException)
+import Socket.Buffer (Buffer)
+import Socket.Interrupt (Interrupt,Intr,wait,tokenToStreamReceiveException)
 import System.Posix.Types (Fd)
 
 import qualified Foreign.C.Error.Describe as D
 import qualified Socket.EventManager as EM
-import qualified Stream.Buffer as Buffer
+import qualified Socket.Buffer as Buffer
 import qualified Stream.Receive as Receive
 
 -- Receive exactly the specified number of bytes, making repeated calls to
@@ -90,7 +90,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
   | otherwise = unbox $ do
       let !maxLen = Buffer.length buf
       !token <- wait intr tv
-      case tokenToReceiveException token of
+      case tokenToStreamReceiveException token of
         Left err -> pure (Left err)
         Right _ -> Receive.receiveOnce conn buf >>= \case
           Left err ->

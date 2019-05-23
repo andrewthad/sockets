@@ -34,7 +34,7 @@ import Control.Concurrent.STM (TVar)
 import Control.Monad (when)
 import Control.Monad.STM (atomically)
 import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
-import Data.Bits (testBit,unsafeShiftR)
+import Data.Bits (unsafeShiftR)
 import Data.Primitive (MutableUnliftedArray(..),MutablePrimArray(..),MutableByteArray(..))
 import Data.Primitive (Prim)
 import Data.Word (Word64,Word32)
@@ -275,9 +275,7 @@ stepManager !evs0 !sz0 !epfd !tier1 = do
   Epoll.uninterruptibleWaitMutablePrimArray epfd evs0 (intToCInt sz0) >>= \case
     Left (Errno code) -> die $ "Socket.EventManager.stepManager: A " ++ show code
     Right len0 -> if len0 > 0
-      then do
-        debug "stepManager: first attempt succeeded"
-        handleEvents evs0 (cintToInt len0) sz0 tier1
+      then handleEvents evs0 (cintToInt len0) sz0 tier1
       else do
         debug "stepManager: first attempt returned no events"
         yield
