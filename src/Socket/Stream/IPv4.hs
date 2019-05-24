@@ -18,7 +18,6 @@ module Socket.Stream.IPv4
   , withListener
   , withAccepted
   , withConnection
-  -- , interruptibleWithConnection
   , forkAccepted
   , forkAcceptedUnmasked
   , interruptibleForkAcceptedUnmasked
@@ -29,7 +28,10 @@ module Socket.Stream.IPv4
   , SocketException(..)
   , AcceptException(..)
   , CloseException(..)
+    -- * Type Arguments
   , Interruptibility(..)
+  , Family(..)
+  , Version(..)
     -- * Unbracketed
     -- $unbracketed
   , listen
