@@ -189,7 +189,7 @@ data ReceiveException :: Interruptibility -> Type where
   -- | STM-style interrupt (much safer than C-style interrupt)
   ReceiveInterrupted :: ReceiveException 'Interruptible
   -- | The peer was unreachable. (@EHOSTUNREACH@)
-  ReceiveUnreachable :: ReceiveException i
+  ReceiveHostUnreachable :: ReceiveException i
 
 deriving stock instance Eq (ReceiveException i)
 deriving stock instance Ord (ReceiveException i)
