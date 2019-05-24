@@ -98,7 +98,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
                    EM.persistentUnready token tv
                    box $ receiveLoop intr conn tv buf minLen total
                | err == eCONNRESET -> pure (Left ReceiveReset)
-               | err == eHOSTUNREACH -> pure (Left ReceiveUnreachable)
+               | err == eHOSTUNREACH -> pure (Left ReceiveHostUnreachable)
                | otherwise -> die ("Socket.Stream.IPv4.receive: " ++ describeErrorCode err)
           Right recvSzCInt -> if recvSzCInt /= 0
             then do
