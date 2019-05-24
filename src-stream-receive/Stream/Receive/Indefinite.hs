@@ -12,7 +12,7 @@ module Stream.Receive.Indefinite
 
 import Control.Monad (when)
 import Control.Concurrent.STM (TVar)
-import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eCONNRESET)
+import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eCONNRESET, eHOSTUNREACH)
 import Foreign.C.Types (CSize)
 import GHC.Exts (RealWorld,State#,Int(I#),Int#)
 import GHC.IO (IO(IO))
@@ -35,7 +35,7 @@ receiveExactly !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr conn
   e <- box $ receiveLoop intr conn tv buf (Buffer.length buf) 0
-  case e of 
+  case e of
     Left err -> pure (Left err)
     -- Discard the total since it is known to be equal to the
     -- requested number of bytes.
@@ -98,6 +98,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
                    EM.persistentUnready token tv
                    box $ receiveLoop intr conn tv buf minLen total
                | err == eCONNRESET -> pure (Left ReceiveReset)
+               | err == eHOSTUNREACH -> pure (Left ReceiveUnreachable)
                | otherwise -> die ("Socket.Stream.IPv4.receive: " ++ describeErrorCode err)
           Right recvSzCInt -> if recvSzCInt /= 0
             then do
