@@ -67,7 +67,7 @@ receiveManyFromIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+  -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
   -> Socket.IPv4.Slab
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received

@@ -16,6 +16,7 @@ module Socket.Stream
   , Connection(..)
   ) where
 
+import Socket (Family(..))
 import Socket (Direction(..),Interruptibility(..),Forkedness(..))
 import Socket.IPv4 (SocketException(..))
 import System.Posix.Types (Fd)
@@ -55,23 +56,31 @@ newtype Connection = Connection Fd
 -- it will cause a @SocketUnrecoverableException@ to be thrown. The Linux
 -- cognoscenti are encouraged to open an issue if they have more information
 -- about the circumstances under which this exception can occur.
-data ConnectException :: Interruptibility -> Type where
+--
+-- Although both the POSIX spec and the linux man page list @ENETUNREACH@
+-- as an error code that is possible for any type of socket, this library
+-- author does not believe that this error code can happen when calling
+-- @connect@ on a unix domain socket. Open an issue if this in incorrect.
+data ConnectException :: Family -> Interruptibility -> Type where
   -- | Either the connection was blocked by a local firewall rule or it
   --   was blocked because it was to a broadcast address. Sadly, these
   --   two errors are not distinguished by the Linux sockets API.
   --   (@EACCES@/@EPERM@)
-  ConnectFirewalled :: ConnectException i
+  ConnectFirewalled :: ConnectException d i
   -- | A limit on the number of open file descriptors has been reached.
   --   This could be the per-process limit or the system limit.
   --   (@EMFILE@ and @ENFILE@)
-  ConnectFileDescriptorLimit :: ConnectException i
+  ConnectFileDescriptorLimit :: ConnectException d i
   -- | The network is unreachable. (@ENETUNREACH@)
-  ConnectNetworkUnreachable :: ConnectException i
+  ConnectNetworkUnreachable :: ConnectException ('Internet v) i
+  -- | No valid routing table entry matches the destination address.
+  --   (@EHOSTUNREACH@)
+  ConnectHostUnreachable :: ConnectException ('Internet v) i
   -- | All port numbers in the ephemeral port range are currently in
-  --   use. (@EADDRNOTAVAIL@)
-  ConnectEphemeralPortsExhausted :: ConnectException i
+  --   use. (@EADDRNOTAVAIL@). 
+  ConnectEphemeralPortsExhausted :: ConnectException d i
   -- | No one is listening on the remote address. (@ECONNREFUSED@)
-  ConnectRefused :: ConnectException i
+  ConnectRefused :: ConnectException d i
   -- | Timeout while attempting connection. The server may be too busy
   --   to accept new connections. Note that stock Linux configuration has
   --   timeout at 
@@ -79,14 +88,16 @@ data ConnectException :: Interruptibility -> Type where
   --   Users interested in timing out more quickly are encouraged to
   --   use @registerDelay@ with the @interruptible@ variants of the
   --   connection functions in this library. (@ETIMEDOUT@)
-  ConnectTimeout :: ConnectException i
+  ConnectTimeout :: ConnectException d i
+  -- | Remote socket does not match the local socket type. (@EPROTOTYPE@)
+  ConnectProtocolType :: ConnectException 'Unix i
   -- | STM-style interrupt (much safer than C-style interrupt)
-  ConnectInterrupted :: ConnectException 'Interruptible
+  ConnectInterrupted :: ConnectException d 'Interruptible
 
-deriving stock instance Eq (ConnectException i)
-deriving stock instance Ord (ConnectException i)
-deriving stock instance Show (ConnectException i)
-deriving anyclass instance Typeable i => Exception (ConnectException i)
+deriving stock instance Eq (ConnectException d i)
+deriving stock instance Ord (ConnectException d i)
+deriving stock instance Show (ConnectException d i)
+deriving anyclass instance (Typeable d, Typeable i) => Exception (ConnectException d i)
 
 
 data CloseException :: Type where

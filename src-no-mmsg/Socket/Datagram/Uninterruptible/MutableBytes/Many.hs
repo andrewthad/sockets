@@ -43,7 +43,7 @@ receiveMany (Socket fd) (Socket.Discard.Slab{sizes,payloads}) =
 -- corresponding to each datagram. This introduces another array
 -- to the structure-of-arrays.
 receiveManyFromIPv4 :: 
-     Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+     Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
   -> Socket.IPv4.Slab
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received

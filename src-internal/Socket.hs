@@ -11,6 +11,7 @@ module Socket
   , Direction(..)
   , Connectedness(..)
   , Family(..)
+  , Version(..)
   , Interruptibility(..)
   , Forkedness(..)
   , cgetsockname 
@@ -39,7 +40,9 @@ data Direction = Send | Receive
 
 data Connectedness = Connected | Unconnected
 
-data Family = IPv4 | IPv6 | Unix
+data Family = Internet Version | Unix
+
+data Version = V4 | V6
 
 data Interruptibility = Interruptible | Uninterruptible
 

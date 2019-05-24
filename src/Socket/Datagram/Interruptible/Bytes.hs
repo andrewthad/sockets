@@ -20,7 +20,7 @@ import Data.Bytes.Types (MutableBytes(..))
 import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
-import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
+import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Interruptible))
 import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),ReceiveException)
 import Socket.IPv4 (Message(..),Slab(..))
@@ -55,7 +55,7 @@ receiveFromIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+  -> Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Int -- ^ Maximum datagram size
   -> IO (Either (ReceiveException 'Interruptible) Message)
 receiveFromIPv4 !intr (Socket !sock) !maxSz = do
@@ -72,7 +72,7 @@ receiveManyFromIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+  -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
   -> Socket.IPv4.Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (SmallArray Message))
 receiveManyFromIPv4 intr sock slab = do
@@ -86,7 +86,7 @@ receiveMany ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+  -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
   -> Socket.Discard.Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (UnliftedArray ByteArray))
 receiveMany intr sock slab = do

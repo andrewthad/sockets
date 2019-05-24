@@ -50,13 +50,13 @@ import Control.Monad.STM (atomically)
 import Control.Concurrent.STM (TVar,modifyTVar')
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
-import Foreign.C.Error (eADDRINUSE)
+import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Types (CInt)
 import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
-import Socket (SocketUnrecoverableException(..))
+import Socket (SocketUnrecoverableException(..),Family(Internet),Version(V4))
 import Socket (cgetsockname,cclose)
 import Socket.Error (die)
 import Socket.Debug (debug)
@@ -502,7 +502,7 @@ interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
 connect ::
      Peer
      -- ^ Remote endpoint
-  -> IO (Either (ConnectException 'Uninterruptible) Connection)
+  -> IO (Either (ConnectException ('Internet 'V4) 'Uninterruptible) Connection)
 connect !remote = do
   beforeEstablishment remote >>= \case
     Left err -> pure (Left err)
@@ -564,7 +564,7 @@ connect !remote = do
 -- Internal function called by both connect and interruptibleConnect
 -- before the connection is established. Creates the socket and prepares
 -- the sockaddr.
-beforeEstablishment :: Peer -> IO (Either (ConnectException i) (Fd,S.SocketAddress))
+beforeEstablishment :: Peer -> IO (Either (ConnectException ('Internet 'V4) i) (Fd,S.SocketAddress))
 {-# INLINE beforeEstablishment #-}
 beforeEstablishment !remote = do
   debug ("beforeEstablishment: opening connection " ++ show remote)
@@ -587,7 +587,7 @@ afterEstablishment ::
      TVar EM.Token -- token tvar 
   -> EM.Token -- old token
   -> Fd
-  -> IO (Either (ConnectException i) Connection)
+  -> IO (Either (ConnectException ('Internet 'V4) i) Connection)
 afterEstablishment !tv !oldToken !fd = do
   debug ("afterEstablishment: finished waiting, fd=" ++ show fd)
   e <- S.uninterruptibleGetSocketOption fd
@@ -647,7 +647,7 @@ withConnection ::
      -- ^ Callback to handle an ungraceful close. 
   -> (Connection -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
-  -> IO (Either (ConnectException 'Uninterruptible) b)
+  -> IO (Either (ConnectException ('Internet 'V4) 'Uninterruptible) b)
 withConnection !remote g f = mask $ \restore -> do
   connect remote >>= \case
     Left err -> pure (Left err)
@@ -690,11 +690,12 @@ describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show 
 -- testing for some exceptions that cannot occur as a result of
 -- a particular call, but doing otherwise would be fraught with
 -- uncertainty.
-handleConnectException :: String -> Errno -> IO (Either (ConnectException i) a)
+handleConnectException :: String -> Errno -> IO (Either (ConnectException ('Internet 'V4) i) a)
 handleConnectException func e
   | e == eACCES = pure (Left ConnectFirewalled)
   | e == ePERM = pure (Left ConnectFirewalled)
   | e == eNETUNREACH = pure (Left ConnectNetworkUnreachable)
+  | e == eHOSTUNREACH = pure (Left ConnectHostUnreachable)
   | e == eCONNREFUSED = pure (Left ConnectRefused)
   | e == eADDRNOTAVAIL = pure (Left ConnectEphemeralPortsExhausted)
   | e == eTIMEDOUT = pure (Left ConnectTimeout)
@@ -706,7 +707,13 @@ handleConnectException func e
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to open a connection (not listen for inbound connections).
-handleSocketConnectException :: String -> Errno -> IO (Either (ConnectException i) a)
+-- Since this library packs @socket@ and @connect@ into a
+-- single function, we have to have a common type for
+-- exceptions.
+handleSocketConnectException ::
+     String
+  -> Errno
+  -> IO (Either (ConnectException ('Internet 'V4) i) a)
 handleSocketConnectException func e
   | e == eMFILE = pure (Left ConnectFileDescriptorLimit)
   | e == eNFILE = pure (Left ConnectFileDescriptorLimit)

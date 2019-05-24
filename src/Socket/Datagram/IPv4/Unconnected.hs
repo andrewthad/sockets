@@ -61,7 +61,7 @@ import qualified Socket.EventManager as EM
 withSocket ::
      Peer
      -- ^ Address and port to use
-  -> (Socket 'Unconnected 'SCK.IPv4 -> Word16 -> IO a)
+  -> (Socket 'Unconnected ('SCK.Internet 'SCK.V4)  -> Word16 -> IO a)
      -- ^ Callback providing the socket and the chosen port
   -> IO (Either SocketException a)
 withSocket endpoint@Peer{port = specifiedPort} f = mask $ \restore -> do

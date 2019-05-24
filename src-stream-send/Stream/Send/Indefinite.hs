@@ -4,6 +4,7 @@
 
 module Stream.Send.Indefinite
   ( send
+  , sendOnce
   ) where
 
 import Control.Concurrent.STM (TVar)
@@ -52,6 +53,37 @@ sendLoop !intr !conn !tv !old !buf = if len > 0
       sendLoop intr conn tv old (Buffer.advance buf sz)
   else if len == 0
     then pure (Right ())
+    else die "Socket.Stream.send: negative slice length"
+  where
+  !len = Buffer.length buf
+
+sendOnce :: Interrupt -> Connection -> Buffer -> IO (Either (SendException Intr) Int)
+sendOnce !intr (Connection conn) !buf = do
+  let !mngr = EM.manager
+  tv <- EM.writer mngr conn
+  token0 <- wait intr tv
+  case tokenToStreamSendException token0 of
+    Left err -> pure (Left err)
+    Right _ -> sendOnceLoop intr conn tv token0 buf
+
+sendOnceLoop ::
+     Interrupt -> Fd -> TVar Token -> Token
+  -> Buffer -> IO (Either (SendException Intr) Int)
+sendOnceLoop !intr !conn !tv !old !buf = if len > 0
+  then Send.sendOnce conn buf >>= \case
+    Left e ->
+      if | e == eAGAIN || e == eWOULDBLOCK -> do
+             EM.unready old tv
+             new <- wait intr tv
+             case tokenToStreamSendException new of
+               Left err -> pure (Left err)
+               Right _ -> sendOnceLoop intr conn tv new buf
+         | e == ePIPE -> pure (Left SendShutdown)
+         | e == eCONNRESET -> pure (Left SendReset)
+         | otherwise -> die ("Socket.Stream.send: " ++ describeErrorCode e)
+    Right sz' -> pure $! Right $! csizeToInt sz'
+  else if len == 0
+    then pure (Right 0)
     else die "Socket.Stream.send: negative slice length"
   where
   !len = Buffer.length buf

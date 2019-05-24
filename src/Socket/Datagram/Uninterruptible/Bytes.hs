@@ -31,7 +31,7 @@ import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
 import GHC.Exts (proxy#)
-import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
+import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
 import Socket.IPv4 (Peer(..),Message(..),Slab(..),freezeSlab)
@@ -58,7 +58,7 @@ send (Socket !sock) !buf =
   CS.send proxy# () sock buf
 
 sendToIPv4 ::
-     Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+     Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Peer -- ^ Destination
   -> Bytes -- ^ Slice of a buffer
   -> IO (Either (SendException 'Uninterruptible) ())
@@ -81,7 +81,7 @@ receive (Socket !sock) !maxSz = do
     Left err -> pure (Left err)
 
 receiveFromIPv4 ::
-     Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+     Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Int -- ^ Maximum datagram size
   -> IO (Either (ReceiveException 'Uninterruptible) Message)
 receiveFromIPv4 (Socket !sock) !maxSz = do
@@ -95,7 +95,7 @@ receiveFromIPv4 (Socket !sock) !maxSz = do
     Left err -> pure (Left err)
 
 receiveManyFromIPv4 ::
-     Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+     Socket 'Unconnected ('Internet 'V4) -- ^ Socket
   -> Socket.IPv4.Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Uninterruptible) (SmallArray Message))
 receiveManyFromIPv4 sock slab = do
@@ -106,7 +106,7 @@ receiveManyFromIPv4 sock slab = do
       pure (Right arr)
 
 receiveMany ::
-     Socket 'Unconnected 'SCK.IPv4 -- ^ Socket
+     Socket 'Unconnected ('Internet 'V4) -- ^ Socket
   -> Socket.Discard.Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Uninterruptible) (UnliftedArray ByteArray))
 receiveMany sock slab = do

@@ -3,6 +3,7 @@
 
 module Socket.Stream.Interruptible.MutableBytes
   ( send
+  , sendOnce
   , receiveExactly
   , receiveOnce
   , receiveBetween
@@ -27,6 +28,17 @@ send ::
   -> IO (Either (SendException 'Interruptible) ())
 {-# inline send #-}
 send = Send.send
+
+-- | Send as much of the buffer slice as there is space for in the
+--   TCP send buffer. Returns the number of bytes sent.
+sendOnce ::
+     TVar Bool 
+     -- ^ Interrupt. On 'True', give up and return @'Left' 'SendInterrupted'@.
+  -> Connection -- ^ Connection
+  -> MutableBytes RealWorld -- ^ Slice of a buffer
+  -> IO (Either (SendException 'Interruptible) Int)
+{-# inline sendOnce #-}
+sendOnce = Send.sendOnce
 
 -- | Receive a number of bytes exactly equal to the length of the
 --   buffer slice. If needed, this may call @recv@ repeatedly until

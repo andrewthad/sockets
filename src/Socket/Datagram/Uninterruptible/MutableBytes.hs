@@ -21,7 +21,7 @@ import Data.Bytes.Types (MutableBytes)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import GHC.Exts (RealWorld,proxy#)
 import Posix.Socket (SocketAddressInternet)
-import Socket (Connectedness(..),Family(..),Interruptibility(Uninterruptible))
+import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
 import Socket.IPv4 (Peer,Receipt)
 
@@ -54,7 +54,7 @@ receive (Socket !sock) !buf =
     Left err -> pure (Left err)
 
 sendToIPv4 ::
-     Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+     Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Peer -- ^ Destination
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (SendException 'Uninterruptible) ())
@@ -62,7 +62,7 @@ sendToIPv4 (Socket !sock) !dst !buf =
   V4S.send proxy# dst sock buf
 
 receiveFromIPv4 ::
-     Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+     Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> MutablePrimArrayOffset RealWorld SocketAddressInternet
      -- ^ Buffer for returned peer address

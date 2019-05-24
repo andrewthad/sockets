@@ -25,11 +25,7 @@ import GHC.Exts (RealWorld)
 
 import qualified Posix.Socket as S
 
--- TODO: move AddressBuffer out of here. This will come back to
--- bite me eventually.
-
 type Buffer = MutableBytes RealWorld
-type AddressBuffer = SocketAddressInternet
 
 advance :: MutableBytes RealWorld -> Int -> MutableBytes RealWorld
 {-# inline advance #-}

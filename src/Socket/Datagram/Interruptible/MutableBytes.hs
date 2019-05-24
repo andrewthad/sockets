@@ -21,9 +21,9 @@ import Data.Bytes.Types (MutableBytes)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import GHC.Exts (RealWorld)
 import Posix.Socket (SocketAddressInternet)
-import Socket (Connectedness(..),Family(..),Interruptibility(Interruptible))
+import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Interruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Socket.IPv4 (Peer,Receipt)
+import Socket.IPv4 (Peer)
 
 import qualified Socket.Datagram.Interruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Connected as CR
@@ -60,7 +60,7 @@ receive !intr (Socket !sock) !buf =
 sendToIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return @'Left' 'SendInterrupted'@.
-  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+  -> Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Peer -- ^ Destination
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> IO (Either (SendException 'Interruptible) ())
@@ -70,7 +70,7 @@ sendToIPv4 !intr (Socket !sock) !dst !buf =
 receiveFromIPv4 ::
      TVar Bool
      -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
-  -> Socket 'Unconnected 'IPv4 -- ^ IPv4 socket without designated peer
+  -> Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> MutableBytes RealWorld -- ^ Slice of a buffer
   -> MutablePrimArrayOffset RealWorld SocketAddressInternet
      -- ^ Buffer for returned peer address
