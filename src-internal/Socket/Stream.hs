@@ -77,13 +77,13 @@ data ConnectException :: Family -> Interruptibility -> Type where
   --   (@EHOSTUNREACH@)
   ConnectHostUnreachable :: ConnectException ('Internet v) i
   -- | All port numbers in the ephemeral port range are currently in
-  --   use. (@EADDRNOTAVAIL@). 
+  --   use. (@EADDRNOTAVAIL@).
   ConnectEphemeralPortsExhausted :: ConnectException d i
   -- | No one is listening on the remote address. (@ECONNREFUSED@)
   ConnectRefused :: ConnectException d i
   -- | Timeout while attempting connection. The server may be too busy
   --   to accept new connections. Note that stock Linux configuration has
-  --   timeout at 
+  --   timeout at
   --   <http://willbryant.net/overriding_the_default_linux_kernel_20_second_tcp_socket_connect_timeout appropriately 20 seconds>.
   --   Users interested in timing out more quickly are encouraged to
   --   use @registerDelay@ with the @interruptible@ variants of the
@@ -188,6 +188,8 @@ data ReceiveException :: Interruptibility -> Type where
   ReceiveReset :: ReceiveException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   ReceiveInterrupted :: ReceiveException 'Interruptible
+  -- | The peer was unreachable. (@EHOSTUNREACH@)
+  ReceiveUnreachable :: ReceiveException i
 
 deriving stock instance Eq (ReceiveException i)
 deriving stock instance Ord (ReceiveException i)
