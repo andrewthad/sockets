@@ -23,10 +23,10 @@ type InterruptRep = 'LiftedRep
 type Interrupt = TVar Bool
 type Intr = 'Interruptible
 
-tokenToStreamSendException :: Token -> Either (Stream.SendException 'Interruptible) ()
+tokenToStreamSendException :: Token -> Int -> Either (Stream.SendException 'Interruptible) ()
 {-# inline tokenToStreamSendException #-}
-tokenToStreamSendException t = if EM.isInterrupt t
-  then Left Stream.SendInterrupted
+tokenToStreamSendException t i = if EM.isInterrupt t
+  then Left (Stream.SendInterrupted i)
   else Right ()
 
 tokenToStreamReceiveException :: Token -> Either (Stream.ReceiveException 'Interruptible) ()

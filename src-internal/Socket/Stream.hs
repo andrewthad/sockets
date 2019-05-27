@@ -17,7 +17,7 @@ module Socket.Stream
   ) where
 
 import Socket (Family(..))
-import Socket (Direction(..),Interruptibility(..),Forkedness(..))
+import Socket (Interruptibility(..))
 import Socket.IPv4 (SocketException(..))
 import System.Posix.Types (Fd)
 
@@ -149,8 +149,12 @@ data SendException :: Interruptibility -> Type where
   SendShutdown :: SendException i
   -- | The peer reset the connection.
   SendReset :: SendException i
-  -- | STM-style interrupt (much safer than C-style interrupt)
-  SendInterrupted :: SendException 'Interruptible
+  -- | STM-style interrupt (much safer than C-style interrupt).
+  -- This provides the number of bytes sent before the interrupt
+  -- happened. For @sendOnce@, this will always be zero, but
+  -- for @send@, it may be any non-negative number less than the
+  -- number of bytes the caller intended to send.
+  SendInterrupted :: !Int -> SendException 'Interruptible
 
 deriving stock instance Eq (SendException i)
 deriving stock instance Ord (SendException i)

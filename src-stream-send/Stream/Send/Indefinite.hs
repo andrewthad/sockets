@@ -29,28 +29,28 @@ send !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   tv <- EM.writer mngr conn
   token0 <- wait intr tv
-  case tokenToStreamSendException token0 of
+  case tokenToStreamSendException token0 0 of
     Left err -> pure (Left err)
-    Right _ -> sendLoop intr conn tv token0 buf
+    Right _ -> sendLoop intr conn tv token0 buf 0
 
 sendLoop ::
      Interrupt -> Fd -> TVar Token -> Token
-  -> Buffer -> IO (Either (SendException Intr) ())
-sendLoop !intr !conn !tv !old !buf = if len > 0
+  -> Buffer -> Int -> IO (Either (SendException Intr) ())
+sendLoop !intr !conn !tv !old !buf !sent = if len > 0
   then Send.sendOnce conn buf >>= \case
     Left e ->
       if | e == eAGAIN || e == eWOULDBLOCK -> do
              EM.unready old tv
              new <- wait intr tv
-             case tokenToStreamSendException new of
+             case tokenToStreamSendException new sent of
                Left err -> pure (Left err)
-               Right _ -> sendLoop intr conn tv new buf
+               Right _ -> sendLoop intr conn tv new buf sent
          | e == ePIPE -> pure (Left SendShutdown)
          | e == eCONNRESET -> pure (Left SendReset)
          | otherwise -> die ("Socket.Stream.send: " ++ describeErrorCode e)
     Right sz' -> do
       let sz = csizeToInt sz'
-      sendLoop intr conn tv old (Buffer.advance buf sz)
+      sendLoop intr conn tv old (Buffer.advance buf sz) (sent + sz)
   else if len == 0
     then pure (Right ())
     else die "Socket.Stream.send: negative slice length"
@@ -62,7 +62,7 @@ sendOnce !intr (Connection conn) !buf = do
   let !mngr = EM.manager
   tv <- EM.writer mngr conn
   token0 <- wait intr tv
-  case tokenToStreamSendException token0 of
+  case tokenToStreamSendException token0 0 of
     Left err -> pure (Left err)
     Right _ -> sendOnceLoop intr conn tv token0 buf
 
@@ -75,7 +75,7 @@ sendOnceLoop !intr !conn !tv !old !buf = if len > 0
       if | e == eAGAIN || e == eWOULDBLOCK -> do
              EM.unready old tv
              new <- wait intr tv
-             case tokenToStreamSendException new of
+             case tokenToStreamSendException new 0 of
                Left err -> pure (Left err)
                Right _ -> sendOnceLoop intr conn tv new buf
          | e == ePIPE -> pure (Left SendShutdown)

@@ -28,9 +28,12 @@ type InterruptRep = 'TupleRep '[]
 type Interrupt = Proxy# Void
 type Intr = 'Uninterruptible
 
-tokenToStreamSendException :: Token -> Either (Stream.SendException 'Uninterruptible) ()
+tokenToStreamSendException ::
+     Token
+  -> Int
+  -> Either (Stream.SendException 'Uninterruptible) ()
 {-# inline tokenToStreamSendException #-}
-tokenToStreamSendException _ = Right ()
+tokenToStreamSendException _ _ = Right ()
 
 tokenToStreamReceiveException :: Token -> Either (Stream.ReceiveException 'Uninterruptible) ()
 {-# inline tokenToStreamReceiveException #-}
