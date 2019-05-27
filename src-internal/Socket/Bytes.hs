@@ -10,7 +10,7 @@ module Socket.Bytes
 
 import Prelude hiding (length)
 
-import Data.Bytes.Types (Bytes(..))
+import Data.Bytes.Types (Bytes(Bytes))
 import Posix.Socket (uninterruptibleSendByteArray,noSignal)
 import Foreign.C.Types (CInt,CSize)
 import Foreign.C.Error (Errno)

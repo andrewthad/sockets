@@ -11,7 +11,7 @@ module Socket.MutableBytes
 
 import Prelude hiding (length)
 
-import Data.Bytes.Types (MutableBytes(..))
+import Data.Bytes.Types (MutableBytes(MutableBytes))
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import Data.Primitive.ByteArray.Offset (MutableByteArrayOffset(..))
 import Posix.Socket (uninterruptibleSendMutableByteArray)

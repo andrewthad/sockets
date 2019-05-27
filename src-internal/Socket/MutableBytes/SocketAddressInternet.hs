@@ -24,7 +24,6 @@ import System.Posix.Types (Fd)
 import qualified Data.Primitive as PM
 import qualified Posix.Socket as S
 
-type Address = SocketAddressInternet
 type AddressBuffer = PM.MutablePrimArray RealWorld SocketAddressInternet
 type AddressBufferOffset = MutablePrimArrayOffset RealWorld SocketAddressInternet
 

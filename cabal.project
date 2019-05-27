@@ -1,4 +1,4 @@
-packages: .
+packages: . ../byteslice ../primitive-offset ../posix-api
 source-repository-package
   type: git
   location: https://github.com/andrewthad/posix-api

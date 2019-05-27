@@ -12,7 +12,7 @@ module Socket.Connected.Bytes
 
 import Prelude hiding (length)
 
-import Data.Bytes.Types (Bytes(..))
+import Data.Bytes.Types (Bytes(Bytes))
 import Socket.Bytes (Buffer,length,advance)
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CInt,CSize)

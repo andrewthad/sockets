@@ -23,7 +23,7 @@ import GHC.Exts (RealWorld,proxy#)
 import Posix.Socket (SocketAddressInternet)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Socket.IPv4 (Peer,Receipt)
+import Socket.IPv4 (Peer)
 
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected as CR

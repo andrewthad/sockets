@@ -39,7 +39,6 @@ import Socket.IPv4 (newSlabIPv4)
 import Socket.Discard (newSlab)
 
 import qualified Data.Primitive as PM
-import qualified Socket as SCK
 import qualified Socket.Discard
 import qualified Socket.Datagram.Uninterruptible.Bytes.Send.Connected as CS
 import qualified Socket.Datagram.Uninterruptible.Bytes.Send.IPv4 as V4S

@@ -12,7 +12,7 @@ module Socket.Destined.IPv4.MutableBytes
 
 import Prelude hiding (length)
 
-import Data.Bytes.Types (MutableBytes(..))
+import Data.Bytes.Types (MutableBytes(MutableBytes))
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (RealWorld)
