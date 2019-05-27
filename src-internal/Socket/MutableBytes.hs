@@ -12,18 +12,13 @@ module Socket.MutableBytes
 import Prelude hiding (length)
 
 import Data.Bytes.Types (MutableBytes(MutableBytes))
-import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
-import Data.Primitive.ByteArray.Offset (MutableByteArrayOffset(..))
 import Posix.Socket (uninterruptibleSendMutableByteArray)
 import Posix.Socket (uninterruptibleReceiveMutableByteArray)
-import Posix.Socket (SocketAddressInternet,noSignal)
-import Posix.Socket (MessageFlags,Message(Receive))
+import Posix.Socket (noSignal)
 import Foreign.C.Types (CInt,CSize)
 import Foreign.C.Error (Errno)
 import System.Posix.Types (Fd)
 import GHC.Exts (RealWorld)
-
-import qualified Posix.Socket as S
 
 type Buffer = MutableBytes RealWorld
 

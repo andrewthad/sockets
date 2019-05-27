@@ -1,8 +1,6 @@
-{-# language DataKinds #-}
+signature Stream.Send.B where
 
-signature Stream.Send where
-
-import Socket.Buffer (Buffer)
+import Stream.Send.Buffer.B (Buffer)
 
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CSize)

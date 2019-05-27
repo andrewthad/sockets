@@ -57,6 +57,9 @@ sendLoop !intr !conn !tv !old !buf !sent = if len > 0
   where
   !len = Buffer.length buf
 
+-- TODO: sendOnce and send (along with their recursive helper
+-- functions) are extremely similar. Maybe there is a way to
+-- factor out something they have in common.
 sendOnce :: Interrupt -> Connection -> Buffer -> IO (Either (SendException Intr) Int)
 sendOnce !intr (Connection conn) !buf = do
   let !mngr = EM.manager

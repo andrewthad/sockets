@@ -103,7 +103,6 @@ library sockets-internal
     Socket.Bytes
     Socket.Destined.IPv4.MutableBytes
     Socket.Destined.IPv4.Bytes
-    Socket.Peerless
     Socket.Discard
     Socket.Connected.MutableBytes
     Socket.Connected.Bytes
@@ -236,6 +235,25 @@ library sockets-stream-receive
   signatures:
     Stream.Receive
   hs-source-dirs: src-stream-receive
+  default-language: Haskell2010
+  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+
+library sockets-stream-send-two
+  build-depends:
+    , base >= 4.11.1.0 && <5
+    , error-codes >= 0.1.0.1 && < 0.2
+    , posix-api >= 0.2.1
+    , stm >= 2.4
+    , sockets-internal
+    , sockets-interrupt
+  exposed-modules:
+    Stream.Send.Two.Indefinite
+  signatures:
+    Stream.Send.Two
+    Stream.Send.B
+    Stream.Send.Buffer.A
+    Stream.Send.Buffer.B
+  hs-source-dirs: src-stream-send-two
   default-language: Haskell2010
   ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
 

@@ -1,0 +1,11 @@
+signature Stream.Send.Buffer.B where
+
+-- This signature is just a copy of Socket.Buffer
+-- from src-buffer. I do not know of a way to reuse
+-- the signature instead of duplicating it.
+
+import Prelude (Int)
+
+data Buffer
+advance :: Buffer -> Int -> Buffer
+length :: Buffer -> Int

@@ -1,0 +1,18 @@
+signature Stream.Send.Two where
+
+import Foreign.C.Error (Errno)
+import Foreign.C.Types (CSize)
+import Prelude (Either,IO)
+import System.Posix.Types (Fd)
+import Posix.Socket (MessageFlags,Message(Send))
+
+import qualified Stream.Send.Buffer.A as A
+import qualified Stream.Send.Buffer.B as B
+
+-- Make a single POSIX @sendmsg@ call with the unsafe FFI
+-- to single two payloads with a single system call.
+sendOnce ::
+     Fd
+  -> A.Buffer
+  -> B.Buffer
+  -> IO (Either Errno CSize)
