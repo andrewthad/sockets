@@ -24,6 +24,7 @@ tokenToStreamSendException ::
   -> Either (Stream.SendException Intr) ()
 tokenToStreamReceiveException ::
      Token
+  -> Int
   -> Either (Stream.ReceiveException Intr) ()
 tokenToDatagramSendException ::
      Token

@@ -35,9 +35,12 @@ tokenToStreamSendException ::
 {-# inline tokenToStreamSendException #-}
 tokenToStreamSendException _ _ = Right ()
 
-tokenToStreamReceiveException :: Token -> Either (Stream.ReceiveException 'Uninterruptible) ()
+tokenToStreamReceiveException ::
+     Token
+  -> Int
+  -> Either (Stream.ReceiveException 'Uninterruptible) ()
 {-# inline tokenToStreamReceiveException #-}
-tokenToStreamReceiveException _ = Right ()
+tokenToStreamReceiveException _ _ = Right ()
 
 tokenToDatagramSendException :: Token -> Either (Datagram.SendException 'Uninterruptible) ()
 {-# inline tokenToDatagramSendException #-}

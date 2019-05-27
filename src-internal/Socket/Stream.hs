@@ -191,7 +191,12 @@ data ReceiveException :: Interruptibility -> Type where
   -- | The peer reset the connection. (@ECONNRESET@)
   ReceiveReset :: ReceiveException i
   -- | STM-style interrupt (much safer than C-style interrupt)
-  ReceiveInterrupted :: ReceiveException 'Interruptible
+  -- This provides the number of bytes received before the interrupt
+  -- happened. For @receiveOnce@, this will always be zero, but
+  -- for @receiveExactly@ and @receiveBetween@, it may be any
+  -- non-negative number less than the number of bytes the caller
+  -- intended to receive.
+  ReceiveInterrupted :: !Int -> ReceiveException 'Interruptible
   -- | The peer was unreachable. (@EHOSTUNREACH@)
   ReceiveHostUnreachable :: ReceiveException i
 

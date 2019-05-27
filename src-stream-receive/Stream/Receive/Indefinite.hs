@@ -30,7 +30,11 @@ import qualified Stream.Receive as Receive
 
 -- Receive exactly the specified number of bytes, making repeated calls to
 -- POSIX @recv@ if necessary.
-receiveExactly :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) ())
+receiveExactly ::
+     Interrupt
+  -> Connection
+  -> Buffer
+  -> IO (Either (ReceiveException Intr) ())
 receiveExactly !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr conn
@@ -44,7 +48,11 @@ receiveExactly !intr (Connection !conn) !buf = do
 -- Receive a chunk of data from the socket. This may make multiple calls
 -- to POSIX @recv@ if EAGAIN is returned. It makes at most one call that
 -- successfully fills the buffer.
-receiveOnce :: Interrupt -> Connection -> Buffer -> IO (Either (ReceiveException Intr) Int)
+receiveOnce ::
+     Interrupt
+  -> Connection
+  -> Buffer
+  -> IO (Either (ReceiveException Intr) Int)
 receiveOnce !intr (Connection !conn) !buf = do
   let !mngr = EM.manager
   !tv <- EM.reader mngr conn
@@ -81,8 +89,12 @@ box f = IO $ \s0 -> case f s0 of
 
 -- We unbox the result since GHC is not very good at CPR analysis.
 receiveLoop ::
-     Interrupt -> Fd -> TVar Token -> Buffer
-  -> Int -> Int
+     Interrupt
+  -> Fd
+  -> TVar Token
+  -> Buffer
+  -> Int
+  -> Int
   -> Result#
      -- result is isomorphic to IO (Either (ReceiveException Intr) Int)
 receiveLoop !intr !conn !tv !buf !minLen !total
@@ -90,7 +102,7 @@ receiveLoop !intr !conn !tv !buf !minLen !total
   | otherwise = unbox $ do
       let !maxLen = Buffer.length buf
       !token <- wait intr tv
-      case tokenToStreamReceiveException token of
+      case tokenToStreamReceiveException token total of
         Left err -> pure (Left err)
         Right _ -> Receive.receiveOnce conn buf >>= \case
           Left err ->

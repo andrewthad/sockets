@@ -29,10 +29,10 @@ tokenToStreamSendException t i = if EM.isInterrupt t
   then Left (Stream.SendInterrupted i)
   else Right ()
 
-tokenToStreamReceiveException :: Token -> Either (Stream.ReceiveException 'Interruptible) ()
+tokenToStreamReceiveException :: Token -> Int -> Either (Stream.ReceiveException 'Interruptible) ()
 {-# inline tokenToStreamReceiveException #-}
-tokenToStreamReceiveException t = if EM.isInterrupt t
-  then Left Stream.ReceiveInterrupted
+tokenToStreamReceiveException t i = if EM.isInterrupt t
+  then Left (Stream.ReceiveInterrupted i)
   else Right ()
 
 tokenToDatagramSendException :: Token -> Either (Datagram.SendException 'Interruptible) ()
