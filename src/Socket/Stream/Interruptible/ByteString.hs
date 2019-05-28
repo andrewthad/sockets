@@ -12,6 +12,7 @@ module Socket.Stream.Interruptible.ByteString
 
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.ByteString.Internal (ByteString(PS))
+import Data.Bytes.Types (UnmanagedBytes(..))
 import Data.Primitive.Addr (Addr(..))
 import Data.Primitive (MutableByteArray(..))
 import Data.Bytes.Types (MutableBytes(..))
@@ -19,7 +20,6 @@ import Control.Concurrent.STM (TVar)
 import GHC.Exts (Ptr(Ptr),RealWorld,byteArrayContents#,unsafeCoerce#)
 import GHC.ForeignPtr (ForeignPtr(ForeignPtr),ForeignPtrContents(PlainPtr))
 import Socket.Stream (Connection,ReceiveException,SendException)
-import Socket.AddrLength (AddrLength(..))
 import Socket (Interruptibility(Interruptible))
 
 import qualified Data.Primitive as PM
@@ -36,7 +36,7 @@ send ::
   -> IO (Either (SendException 'Interruptible) ())
 {-# inline send #-}
 send !tv !conn !bs = unsafeUseAsCStringLen bs
-  (\(Ptr addr#,len) -> Send.send tv conn (AddrLength (Addr addr#) len))
+  (\(Ptr addr#,len) -> Send.send tv conn (UnmanagedBytes (Addr addr#) len))
 
 -- | Receive a number of bytes exactly equal to the length of the
 --   buffer slice. If needed, this may call @recv@ repeatedly until

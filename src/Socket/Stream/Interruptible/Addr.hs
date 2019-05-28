@@ -8,11 +8,11 @@ module Socket.Stream.Interruptible.Addr
   , receiveBetween
   ) where
 
+import Data.Bytes.Types (UnmanagedBytes(..))
 import Data.Primitive.Addr (Addr)
 import Control.Concurrent.STM (TVar)
 import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Interruptible))
-import Socket.AddrLength (AddrLength(..))
 
 import qualified Socket.Stream.Interruptible.Addr.Send as Send
 import qualified Socket.Stream.Interruptible.Addr.Receive as Receive
@@ -28,7 +28,7 @@ send ::
   -> Int -- ^ Number of bytes to send
   -> IO (Either (SendException 'Interruptible) ())
 {-# inline send #-}
-send !tv !conn !addr !len = Send.send tv conn (AddrLength addr len)
+send !tv !conn !addr !len = Send.send tv conn (UnmanagedBytes addr len)
 
 -- | Receive the requested number of bytes into memory beginning at
 --   the specified address. If needed, this may call @recv@ repeatedly until
@@ -42,7 +42,7 @@ receiveExactly ::
   -> IO (Either (ReceiveException 'Interruptible) ())
 {-# inline receiveExactly #-}
 receiveExactly !tv !conn !addr !len =
-  Receive.receiveExactly tv conn (AddrLength addr len)
+  Receive.receiveExactly tv conn (UnmanagedBytes addr len)
 
 -- | Receive at most the specified number of bytes. This
 -- only makes multiple calls to POSIX @recv@ if EAGAIN is returned. It makes at
@@ -56,7 +56,7 @@ receiveOnce ::
   -> IO (Either (ReceiveException 'Interruptible) Int)
 {-# inline receiveOnce #-}
 receiveOnce tv conn addr len =
-  Receive.receiveOnce tv conn (AddrLength addr len)
+  Receive.receiveOnce tv conn (UnmanagedBytes addr len)
 
 -- | Receive a number of bytes that is between the inclusive lower and
 --   upper bounds. If needed, this may call @recv@ repeatedly until the
@@ -72,4 +72,4 @@ receiveBetween ::
   -> IO (Either (ReceiveException 'Interruptible) Int)
 {-# inline receiveBetween #-}
 receiveBetween tv conn addr minLen maxLen =
-  Receive.receiveBetween tv conn (AddrLength addr maxLen) minLen
+  Receive.receiveBetween tv conn (UnmanagedBytes addr maxLen) minLen

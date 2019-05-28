@@ -1,6 +1,7 @@
+{-# language DuplicateRecordFields #-}
+
 module Socket.AddrLength
-  ( AddrLength(..)
-  , Buffer
+  ( Buffer
   , advance
   , length
   , sendOnce
@@ -9,7 +10,7 @@ module Socket.AddrLength
 
 import Prelude hiding (length)
 
-import Data.Primitive.Addr (Addr)
+import Data.Bytes.Types (UnmanagedBytes(UnmanagedBytes))
 import Posix.Socket (uninterruptibleSend,noSignal)
 import Posix.Socket (uninterruptibleReceive)
 import Foreign.C.Types (CSize)
@@ -18,28 +19,24 @@ import System.Posix.Types (Fd)
 
 import qualified Data.Primitive.Addr as PM
 
-data AddrLength = AddrLength
-  {-# UNPACK #-} !Addr -- pointer to first byte
-  {-# UNPACK #-} !Int -- length
+type Buffer = UnmanagedBytes
 
-type Buffer = AddrLength
-
-advance :: AddrLength -> Int -> AddrLength
+advance :: UnmanagedBytes -> Int -> UnmanagedBytes
 {-# inline advance #-}
-advance (AddrLength addr len) n = AddrLength (PM.plusAddr addr n) (len - n)
+advance (UnmanagedBytes addr len) n = UnmanagedBytes (PM.plusAddr addr n) (len - n)
 
-length :: AddrLength -> Int
+length :: UnmanagedBytes -> Int
 {-# inline length #-}
-length (AddrLength _ len) = len
+length (UnmanagedBytes _ len) = len
 
-sendOnce :: Fd -> AddrLength -> IO (Either Errno CSize)
+sendOnce :: Fd -> UnmanagedBytes -> IO (Either Errno CSize)
 {-# inline sendOnce #-}
-sendOnce fd (AddrLength addr len) =
+sendOnce fd (UnmanagedBytes addr len) =
   uninterruptibleSend fd addr (intToCSize len) noSignal
 
-receiveOnce :: Fd -> AddrLength -> IO (Either Errno CSize)
+receiveOnce :: Fd -> UnmanagedBytes -> IO (Either Errno CSize)
 {-# inline receiveOnce #-}
-receiveOnce fd (AddrLength addr len) =
+receiveOnce fd (UnmanagedBytes addr len) =
   uninterruptibleReceive fd addr (intToCSize len) mempty
 
 intToCSize :: Int -> CSize

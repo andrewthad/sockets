@@ -10,6 +10,7 @@ module Socket.Stream.Uninterruptible.ByteString
   , receiveBetween
   ) where
 
+import Data.Bytes.Types (UnmanagedBytes(..))
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.ByteString.Internal (ByteString(PS))
 import Data.Primitive.Addr (Addr(..))
@@ -18,7 +19,6 @@ import Data.Bytes.Types (MutableBytes(..))
 import GHC.Exts (Ptr(Ptr),RealWorld,byteArrayContents#,unsafeCoerce#,proxy#)
 import GHC.ForeignPtr (ForeignPtr(ForeignPtr),ForeignPtrContents(PlainPtr))
 import Socket.Stream (Connection,ReceiveException,SendException)
-import Socket.AddrLength (AddrLength(..))
 import Socket (Interruptibility(Uninterruptible))
 
 import qualified Data.Primitive as PM
@@ -33,7 +33,7 @@ send ::
   -> IO (Either (SendException 'Uninterruptible) ())
 {-# inline send #-}
 send !conn !bs = unsafeUseAsCStringLen bs
-  (\(Ptr addr#,len) -> Send.send proxy# conn (AddrLength (Addr addr#) len))
+  (\(Ptr addr#,len) -> Send.send proxy# conn (UnmanagedBytes (Addr addr#) len))
 
 -- | Receive a number of bytes exactly equal to the length of the
 --   buffer slice. If needed, this may call @recv@ repeatedly until

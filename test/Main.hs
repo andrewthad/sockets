@@ -1,9 +1,11 @@
 {-# language BangPatterns #-}
-{-# language DerivingStrategies #-}
 {-# language DeriveAnyClass #-}
+{-# language DerivingStrategies #-}
 {-# language LambdaCase #-}
+{-# language MagicHash #-}
 {-# language ScopedTypeVariables #-}
 {-# language TypeFamilies #-}
+{-# language UnboxedTuples #-}
 
 import Control.Applicative (liftA3)
 import Control.Concurrent (forkIO)
@@ -14,10 +16,12 @@ import Control.Exception (throwIO)
 import Control.Monad (when)
 import Control.Monad.ST (runST)
 import Data.ByteString (ByteString)
-import Data.Bytes.Types (Bytes(..),MutableBytes(..))
-import Data.Primitive (ByteArray)
+import Data.Bytes.Types (Bytes(..),MutableBytes(..),UnmanagedBytes(..))
+import Data.Primitive (ByteArray,MutableByteArray(..))
+import Data.Primitive.Addr (Addr(..))
 import Data.Word (Word16,Word8)
 import GHC.Exts (RealWorld)
+import GHC.IO (IO(..))
 import System.Exit (exitFailure)
 import System.IO (stderr,hPutStrLn)
 import Test.Tasty
@@ -36,6 +40,7 @@ import qualified Socket.Stream.IPv4 as SI
 import qualified Socket.Stream.Uninterruptible.Bytes as UB
 import qualified Socket.Stream.Uninterruptible.MutableBytes as UMB
 import qualified Socket.Stream.Uninterruptible.ByteString as UBS
+import qualified Socket.Stream.Uninterruptible.Hybrid as UHYB
 
 main :: IO ()
 main = do
@@ -79,6 +84,12 @@ tests canSpoof = testGroup "socket"
       , testCase "C" testStreamC
       , testCase "D" testStreamD
       , testCase "E" testStreamE
+      , testGroup "F"
+        [ testCase "3KB" (testStreamF 1)
+        , testCase "3MB" (testStreamF (1 * 1024))
+        , testCase "12MB" (testStreamF (4 * 1024))
+        , testCase "48MB" (testStreamF (16 * 1024))
+        ]
       ]
     ]
   ]
@@ -418,6 +429,45 @@ verifyClientSendBytes arr len = go (len - 1)
       if w == magicByte then go (ix - 1) else pure False
     else pure True
 
+testStreamF :: Int -> Assertion
+testStreamF megabytes = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  expectedMut <- PM.newByteArray (3 * payloadBytes)
+  PM.setByteArray expectedMut 0 (2 * payloadBytes) (0xE6 :: Word8)
+  PM.setByteArray expectedMut (2 * payloadBytes) payloadBytes (0xB4 :: Word8)
+  expected <- PM.unsafeFreezeByteArray expectedMut
+  let lenExp = PM.sizeofByteArray expected
+  let lenRec = PM.sizeofByteArray received
+  when (lenExp /= lenRec) $ assertFailure $
+    "Incorrect result: expected length " ++
+    show lenExp ++ " but got " ++ show lenRec
+  when (expected /= received) $ do
+    let ix = differentByte expected received lenExp
+    assertFailure ("Incorrect result differing at byte " ++ show ix)
+  where
+  payloadBytes = megabytes * 1024
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = do
+    dstPort <- PM.takeMVar m
+    let peer = DIU.Peer IPv4.loopback dstPort
+    bufA <- PM.newByteArray (2 * payloadBytes)
+    PM.setByteArray bufA 0 (2 * payloadBytes) (0xE6 :: Word8)
+    bufB <- PM.newPinnedByteArray payloadBytes
+    PM.setByteArray bufB 0 payloadBytes (0xB4 :: Word8)
+    unhandled $ SI.withConnection peer unhandledClose $ \conn -> do
+      unhandled $ UHYB.sendMutableBytesUnmanagedBytes conn
+        (MutableBytes bufA 0 (payloadBytes * 2))
+        (UnmanagedBytes (ptrToAddr (PM.mutableByteArrayContents bufB)) payloadBytes)
+      touchMutableByteArray bufB
+  receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
+  receiver m = do
+    let peer = (SI.Peer IPv4.loopback 0)
+    unhandled $ SI.withListener peer $ \listener port -> do
+      PM.putMVar m port
+      unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
+        unhandled $ UB.receiveExactly conn (payloadBytes * 3)
+
 -- Here, the sender spoofs its ip address and port.
 testDatagramSpoofA :: Assertion
 testDatagramSpoofA = do
@@ -510,3 +560,22 @@ testStreamE = do
       y <- unhandled $ UMB.receiveBetween conn (MutableBytes marr x 150) 100
       unhandled $ UMB.receiveExactly conn (MutableBytes marr (x + y) (256 - (x + y)))
       PM.unsafeFreezeByteArray marr
+
+touchMutableByteArray :: MutableByteArray RealWorld -> IO ()
+touchMutableByteArray (MutableByteArray x) = touchMutableByteArray# x
+
+touchMutableByteArray# :: E.MutableByteArray# RealWorld -> IO ()
+touchMutableByteArray# x = IO $ \s -> case E.touch# x s of s' -> (# s', () #)
+
+ptrToAddr :: E.Ptr a -> Addr
+ptrToAddr (E.Ptr x) = Addr x
+
+differentByte :: ByteArray -> ByteArray -> Int -> Int
+differentByte a b len = go 0 where
+  go !ix = if ix < len
+    then if PM.indexByteArray a ix == (PM.indexByteArray b ix :: Word8)
+      then go (ix + 1)
+      else ix
+    else len
+  
+

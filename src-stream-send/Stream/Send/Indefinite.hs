@@ -5,6 +5,7 @@
 module Stream.Send.Indefinite
   ( send
   , sendOnce
+  , sendLoop
   ) where
 
 import Control.Concurrent.STM (TVar)
@@ -31,26 +32,31 @@ send !intr (Connection !conn) !buf = do
   token0 <- wait intr tv
   case tokenToStreamSendException token0 0 of
     Left err -> pure (Left err)
-    Right _ -> sendLoop intr conn tv token0 buf 0
+    Right _ -> sendLoop intr conn tv token0 buf 0 0
 
+-- This function is exported but only so that it may be reused
+-- by sockets-stream-send-two.
+-- The last argument, @extraOff@, is needed so that when this function
+-- is used by stream-send-two, we can report a correct offset that
+-- includes the length of the first payload as well.
 sendLoop ::
      Interrupt -> Fd -> TVar Token -> Token
-  -> Buffer -> Int -> IO (Either (SendException Intr) ())
-sendLoop !intr !conn !tv !old !buf !sent = if len > 0
+  -> Buffer -> Int -> Int -> IO (Either (SendException Intr) ())
+sendLoop !intr !conn !tv !old !buf !sent !extraOff = if len > 0
   then Send.sendOnce conn buf >>= \case
     Left e ->
       if | e == eAGAIN || e == eWOULDBLOCK -> do
              EM.unready old tv
              new <- wait intr tv
-             case tokenToStreamSendException new sent of
+             case tokenToStreamSendException new (sent + extraOff) of
                Left err -> pure (Left err)
-               Right _ -> sendLoop intr conn tv new buf sent
+               Right _ -> sendLoop intr conn tv new buf sent extraOff
          | e == ePIPE -> pure (Left SendShutdown)
          | e == eCONNRESET -> pure (Left SendReset)
          | otherwise -> die ("Socket.Stream.send: " ++ describeErrorCode e)
     Right sz' -> do
       let sz = csizeToInt sz'
-      sendLoop intr conn tv old (Buffer.advance buf sz) (sent + sz)
+      sendLoop intr conn tv old (Buffer.advance buf sz) (sent + sz) extraOff
   else if len == 0
     then pure (Right ())
     else die "Socket.Stream.send: negative slice length"

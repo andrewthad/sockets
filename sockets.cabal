@@ -111,6 +111,7 @@ library sockets-internal
     Socket.MutableBytes.SocketAddressInternet
     Socket.Interruptible
     Socket.Uninterruptible
+    Hybrid.Send.MutableBytes.AddrLength
   if flag(debug)
     hs-source-dirs: src-debug
   else
@@ -246,6 +247,7 @@ library sockets-stream-send-two
     , stm >= 2.4
     , sockets-internal
     , sockets-interrupt
+    , sockets-stream-send
   exposed-modules:
     Stream.Send.Two.Indefinite
   signatures:
@@ -253,6 +255,12 @@ library sockets-stream-send-two
     Stream.Send.B
     Stream.Send.Buffer.A
     Stream.Send.Buffer.B
+  mixins:
+    sockets-stream-send
+      (Stream.Send.Indefinite)
+      requires
+      (Socket.Buffer as Stream.Send.Buffer.B,
+       Stream.Send as Stream.Send.B)
   hs-source-dirs: src-stream-send-two
   default-language: Haskell2010
   ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
@@ -289,10 +297,12 @@ library
     Socket.Stream.Interruptible.ByteString
     Socket.Stream.Interruptible.Bytes
     Socket.Stream.Interruptible.MutableBytes
+    Socket.Stream.Interruptible.Hybrid
     Socket.Stream.Uninterruptible.Addr
     Socket.Stream.Uninterruptible.ByteString
     Socket.Stream.Uninterruptible.Bytes
     Socket.Stream.Uninterruptible.MutableBytes
+    Socket.Stream.Uninterruptible.Hybrid
   other-modules:
     Socket.Datagram.Interruptible.MutableBytes.Many
     Socket.Datagram.Uninterruptible.MutableBytes.Many
@@ -421,6 +431,22 @@ library
        Stream.Receive as Socket.AddrLength,
        Socket.Buffer as Socket.AddrLength,
        Socket.Interrupt as Socket.Uninterruptible),
+    sockets-stream-send-two
+      (Stream.Send.Two.Indefinite as Socket.Stream.Interruptible.MutableBytes.Addr.Send)
+      requires
+      (Stream.Send.B as Socket.AddrLength,
+       Stream.Send.Buffer.A as Socket.MutableBytes,
+       Stream.Send.Buffer.B as Socket.AddrLength,
+       Stream.Send.Two as Hybrid.Send.MutableBytes.AddrLength,
+       Socket.Interrupt as Socket.Interruptible),
+    sockets-stream-send-two
+      (Stream.Send.Two.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Addr.Send)
+      requires
+      (Stream.Send.B as Socket.AddrLength,
+       Stream.Send.Buffer.A as Socket.MutableBytes,
+       Stream.Send.Buffer.B as Socket.AddrLength,
+       Stream.Send.Two as Hybrid.Send.MutableBytes.AddrLength,
+       Socket.Interrupt as Socket.Uninterruptible),
   build-depends:
     , base >= 4.11.1.0 && <5
     , byteslice >=0.1 && <0.2
@@ -437,6 +463,7 @@ library
     , sockets-internal
     , sockets-stream-bidirectional
     , sockets-stream-send
+    , sockets-stream-send-two
     , stm >=2.4
     , text >=1.2
   if flag(checked)
@@ -465,6 +492,7 @@ test-suite test
     , bytestring
     , byteslice
     , primitive-unlifted
+    , primitive-addr
   if flag(checked)
     build-depends: primitive-checked >= 0.6.4.3
   else
