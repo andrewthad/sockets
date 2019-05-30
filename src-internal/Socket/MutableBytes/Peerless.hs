@@ -18,7 +18,6 @@ import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (RealWorld)
 import Posix.Socket (MessageFlags,Message(Receive))
 import Posix.Socket (SocketAddressInternet)
-import Socket.MutableBytes (Buffer,advance,length)
 import System.Posix.Types (Fd)
 import qualified Posix.Socket as S
 

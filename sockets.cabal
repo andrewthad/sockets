@@ -81,7 +81,7 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , ip >= 1.4.1
     , posix-api >= 0.2.1
-    , primitive-offset >= 0.1 && <0.2
+    , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2
     , primitive-addr >= 0.1 && <0.2
     , stm >= 2.4
@@ -165,7 +165,7 @@ library sockets-datagram-receive
     , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
     , posix-api >= 0.2.1
-    , primitive-offset >= 0.1 && <0.2
+    , primitive-offset >= 0.2 && <0.3
     , sockets-internal
     , sockets-buffer
     , sockets-interrupt
@@ -455,7 +455,7 @@ library
     , ip >=1.4.1
     , posix-api >=0.2.1
     , primitive-addr >= 0.1 && <0.2
-    , primitive-offset >= 0.1 && <0.2
+    , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2
     , sockets-datagram-receive
     , sockets-datagram-receive-many

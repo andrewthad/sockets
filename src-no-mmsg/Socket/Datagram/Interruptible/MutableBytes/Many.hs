@@ -10,33 +10,14 @@ module Socket.Datagram.Interruptible.MutableBytes.Many
   , receiveManyFromIPv4
   ) where
 
-import Control.Applicative ((<|>))
-import Control.Monad.STM (STM,atomically)
-import Control.Concurrent (threadWaitWrite,threadWaitRead,threadWaitReadSTM)
 import Control.Concurrent.STM (TVar)
-import Control.Exception (mask,onException)
-import Data.Functor (($>))
-import Data.Primitive (ByteArray,MutableByteArray(..),Array)
-import Data.Word (Word16)
-import Foreign.C.Error (Errno(..),eWOULDBLOCK,eAGAIN)
-import Foreign.C.Types (CInt,CSize,CUInt)
-import GHC.Exts (Int(I#),RealWorld,ByteArray#,touch#)
-import GHC.IO (IO(..))
-import Net.Types (IPv4(..))
 import Socket (Interruptibility(Interruptible))
 import Socket (Connectedness(..))
 import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.Debug (debug)
-import Socket.IPv4 (Peer(..),Message(..),Slab(..))
 import Socket.Discard (Slab(..))
-import System.Posix.Types (Fd)
+import Socket.IPv4 (Slab(..))
 
-import qualified Socket.IPv4
-import qualified Socket.Discard
 import qualified Socket as SCK
-import qualified Control.Monad.Primitive as PM
-import qualified Data.Primitive as PM
-import qualified Posix.Socket as S
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Many.Unit as RU
 import qualified Socket.Datagram.Interruptible.MutableBytes.Receive.Many.IPv4 as RV4
 
