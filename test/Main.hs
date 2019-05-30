@@ -429,6 +429,7 @@ verifyClientSendBytes arr len = go (len - 1)
       if w == magicByte then go (ix - 1) else pure False
     else pure True
 
+-- This tests that hybrid sending works correctly.
 testStreamF :: Int -> Assertion
 testStreamF megabytes = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
