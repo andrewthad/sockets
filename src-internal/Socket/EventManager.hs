@@ -39,7 +39,7 @@ import Data.Primitive.Unlifted.Array (MutableUnliftedArray(..))
 import Data.Primitive (MutableByteArray(..),MutablePrimArray(..))
 import Data.Primitive (Prim)
 import Data.Word (Word64,Word32)
-import Foreign.C.Error (Errno(..))
+import Foreign.C.Error (Errno(..),eINTR)
 import Foreign.C.Types (CInt)
 import GHC.Conc.Sync (TVar(..),yield)
 import GHC.Exts (RealWorld,Int(I#),(*#),TVar#,ArrayArray#,MutableArrayArray#)
@@ -299,31 +299,36 @@ stepManager !evs0 !sz0 !epfd !tier1 = do
               whenDebugging $ do
                 actualSize <- PM.getSizeofMutablePrimArray evs0
                 when (actualSize /= sz0) (die "stepManager: bad size")
-              Epoll.waitMutablePrimArray epfd evs0 (intToCInt sz0) (-1) >>= \case
-                Left (Errno code) -> die $ "Socket.EventManager.stepManager: C " ++ show code
-                Right len2 -> if len2 > 0
-                  then do
-                    whenDebugging $ do
-                      let !(MutablePrimArray evs0#) = evs0
-                      let untypedEvs0 = MutableByteArray evs0#
-                      debug ("stepManager: third attempt succeeded, len=" ++ show len2 ++ ",sz=" ++ show sz0)
-                      (w0 :: Word32) <- PM.readByteArray untypedEvs0 0
-                      (w1 :: Word32) <- PM.readByteArray untypedEvs0 1
-                      (w2 :: Word32) <- PM.readByteArray untypedEvs0 2
-                      debug $ "stepManager: element 0 raw after third attempt " ++ 
-                        lpad 32 (showIntAtBase 2 binChar w0 "") ++ " " ++
-                        lpad 32 (showIntAtBase 2 binChar w1 "") ++ " " ++
-                        lpad 32 (showIntAtBase 2 binChar w2 "")
-                      when (sz0 > 1) $ do
-                        (w0a :: Word32) <- PM.readByteArray untypedEvs0 3
-                        (w1a :: Word32) <- PM.readByteArray untypedEvs0 4
-                        (w2a :: Word32) <- PM.readByteArray untypedEvs0 5
-                        debug $ "stepManager: element 1 raw after third attempt " ++ 
-                          lpad 32 (showIntAtBase 2 binChar w0a "") ++ " " ++
-                          lpad 32 (showIntAtBase 2 binChar w1a "") ++ " " ++
-                          lpad 32 (showIntAtBase 2 binChar w2a "")
-                    handleEvents evs0 (cintToInt len2) sz0 tier1
-                  else die $ "Socket.EventManager.stepManager: D"
+              let go = Epoll.waitMutablePrimArray epfd evs0 (intToCInt sz0) (-1) >>= \case
+                    -- For reasons beyond me, epoll_wait will just randomly
+                    -- return EINTR 
+                    Left err@(Errno code) -> if err == eINTR
+                      then go
+                      else die $ "Socket.EventManager.stepManager: C " ++ show code
+                    Right len2 -> if len2 > 0
+                      then do
+                        whenDebugging $ do
+                          let !(MutablePrimArray evs0#) = evs0
+                          let untypedEvs0 = MutableByteArray evs0#
+                          debug ("stepManager: third attempt succeeded, len=" ++ show len2 ++ ",sz=" ++ show sz0)
+                          (w0 :: Word32) <- PM.readByteArray untypedEvs0 0
+                          (w1 :: Word32) <- PM.readByteArray untypedEvs0 1
+                          (w2 :: Word32) <- PM.readByteArray untypedEvs0 2
+                          debug $ "stepManager: element 0 raw after third attempt " ++ 
+                            lpad 32 (showIntAtBase 2 binChar w0 "") ++ " " ++
+                            lpad 32 (showIntAtBase 2 binChar w1 "") ++ " " ++
+                            lpad 32 (showIntAtBase 2 binChar w2 "")
+                          when (sz0 > 1) $ do
+                            (w0a :: Word32) <- PM.readByteArray untypedEvs0 3
+                            (w1a :: Word32) <- PM.readByteArray untypedEvs0 4
+                            (w2a :: Word32) <- PM.readByteArray untypedEvs0 5
+                            debug $ "stepManager: element 1 raw after third attempt " ++ 
+                              lpad 32 (showIntAtBase 2 binChar w0a "") ++ " " ++
+                              lpad 32 (showIntAtBase 2 binChar w1a "") ++ " " ++
+                              lpad 32 (showIntAtBase 2 binChar w2a "")
+                        handleEvents evs0 (cintToInt len2) sz0 tier1
+                      else die $ "Socket.EventManager.stepManager: D"
+              go
 
 lpad :: Int -> String -> String
 lpad m xs = replicate (m - length ys) '0' ++ ys
