@@ -751,8 +751,8 @@ handleBindListenException ::
 handleBindListenException !thePort !e
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
-      then pure (Left SocketAddressInUse)
-      else pure (Left SocketEphemeralPortsExhausted)
+      then pure (Left SocketEphemeralPortsExhausted)
+      else pure (Left SocketAddressInUse)
   | otherwise = die
       ("Socket.Stream.IPv4.bindListen: " ++ describeErrorCode e)
 
