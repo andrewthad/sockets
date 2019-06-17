@@ -35,6 +35,7 @@ import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
 import qualified Socket.Datagram.IPv4.Spoof as DIS
 import qualified Socket.Datagram.IPv4.Unconnected as DIU
+import qualified Socket.Datagram.IPv4.Connected as DIC
 import qualified Socket.Datagram.Uninterruptible.Bytes as DUB
 import qualified Socket.Stream.IPv4 as SI
 import qualified Socket.Stream.Uninterruptible.Bytes as UB
@@ -57,13 +58,16 @@ tests :: Bool -> TestTree
 tests canSpoof = testGroup "socket"
   [ testGroup "datagram"
     [ testGroup "ipv4"
-      [ testGroup "undestined"
+      [ testGroup "unconnected"
         [ testCase "A" testDatagramUndestinedA
         , testCase "B" testDatagramUndestinedB
         , testCase "C" testDatagramUndestinedC
         , testCase "D" testDatagramUndestinedD
         , testCase "E" testDatagramUndestinedE
         , testCase "F" testDatagramUndestinedF
+        ]
+      , testGroup "connected"
+        [ testCase "A" testDatagramConnectedA
         ]
       , testGroup "spoof" $ if canSpoof
           then
@@ -112,6 +116,25 @@ data MagicByteMismatch = MagicByteMismatch
 data NegativeByteCount = NegativeByteCount
   deriving stock (Show,Eq)
   deriving anyclass (Exception)
+
+testDatagramConnectedA :: Assertion
+testDatagramConnectedA = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  (port,received) <- concurrently (sender m) (receiver m)
+  received @=? DIU.Message (DIU.Peer IPv4.loopback port) message
+  where
+  message = E.fromList [0,1,2,3] :: ByteArray
+  sz = PM.sizeofByteArray message
+  sender :: PM.MVar RealWorld Word16 -> IO Word16
+  sender m = do
+    dstPort <- PM.takeMVar m
+    unhandled $ DIC.withSocket (DUB.Peer IPv4.loopback 0) (DUB.Peer IPv4.loopback dstPort) $ \sock srcPort -> do
+      unhandled $ DUB.send sock (unsliced message)
+      pure srcPort
+  receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    unhandled $ DUB.receiveFromIPv4 sock sz
 
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do

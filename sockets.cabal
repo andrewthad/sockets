@@ -288,6 +288,7 @@ library
     Socket.Address
     Socket.Datagram.IPv4.Spoof
     Socket.Datagram.IPv4.Unconnected
+    Socket.Datagram.IPv4.Connected
     Socket.Stream.IPv4
     Socket.Datagram.Interruptible.Bytes
     Socket.Datagram.Interruptible.MutableBytes

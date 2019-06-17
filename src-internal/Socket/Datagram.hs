@@ -51,7 +51,7 @@ deriving anyclass instance (Typeable i) => Exception (ReceiveException i)
 -- not POSIX @connect@ has been applied to the socket. A connected
 -- socket socket uses POSIX @send@/@recv@ to communicate with a
 -- single peer. An unconnected socket uses POSIX @sendto@/@recvfrom@
--- to communicate with many peer. The 'Family' refers to whether this
+-- to communicate with many peers. The 'Family' refers to whether this
 -- socket uses IPv4, IPv6, or Unix (local).
 newtype Socket :: Connectedness -> Family -> Type where
   Socket :: Fd -> Socket c a
