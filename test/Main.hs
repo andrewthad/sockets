@@ -33,7 +33,6 @@ import qualified Data.Primitive.Unlifted.Array as PM
 import qualified Data.Primitive.MVar as PM
 import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
-import qualified Socket.Datagram.IPv4.Spoof as DIS
 import qualified Socket.Datagram.IPv4.Unconnected as DIU
 import qualified Socket.Datagram.IPv4.Connected as DIC
 import qualified Socket.Datagram.Uninterruptible.Bytes as DUB
@@ -44,18 +43,10 @@ import qualified Socket.Stream.Uninterruptible.ByteString as UBS
 import qualified Socket.Stream.Uninterruptible.Hybrid as UHYB
 
 main :: IO ()
-main = do
-  canSpoof <- DIS.withSocket (const (pure ())) >>= \case
-    Right () -> pure True
-    Left e -> case e of
-      DIS.SocketPermissionDenied -> pure False
-      DIS.SocketFileDescriptorLimit -> do
-        hPutStrLn stderr "All ephemeral ports are in use. Terminating."
-        exitFailure
-  defaultMain (tests canSpoof)
+main = defaultMain tests
 
-tests :: Bool -> TestTree
-tests canSpoof = testGroup "socket"
+tests :: TestTree
+tests = testGroup "socket"
   [ testGroup "datagram"
     [ testGroup "ipv4"
       [ testGroup "unconnected"
@@ -69,12 +60,6 @@ tests canSpoof = testGroup "socket"
       , testGroup "connected"
         [ testCase "A" testDatagramConnectedA
         ]
-      , testGroup "spoof" $ if canSpoof
-          then
-            [ testCase "A" testDatagramSpoofA
-            , testCase "B" testDatagramSpoofB
-            ]
-          else []
       ]
     ]
   , testGroup "stream"
@@ -176,7 +161,7 @@ testDatagramUndestinedB = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newSlab 2 (max sz1 sz2)
+    slab <- DUB.newPeerlessSlab 2 (max sz1 sz2)
     msgs <- unhandled $ DUB.receiveMany sock slab
     let msgCount = PM.sizeofUnliftedArray msgs
     if msgCount == 2
@@ -218,7 +203,7 @@ testDatagramUndestinedC = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newSlabIPv4 3 (max sz1 (max sz2 (max sz3 sz4)))
+    slab <- DUB.newIPv4Slab 3 (max sz1 (max sz2 (max sz3 sz4)))
     msgsX <- unhandled $ DUB.receiveManyFromIPv4 sock slab
     let msgCountX = PM.sizeofSmallArray msgsX
     (msg1,msg2,msg3) <- if PM.sizeofSmallArray msgsX == 3
@@ -283,7 +268,7 @@ testDatagramUndestinedE = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newSlab 1 (max sz1 (max sz2 sz3))
+    slab <- DUB.newPeerlessSlab 1 (max sz1 (max sz2 sz3))
     msgsX <- unhandled $ DUB.receiveMany sock slab
     when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for X"
     msgsY <- unhandled $ DUB.receiveMany sock slab
@@ -306,7 +291,7 @@ testDatagramUndestinedF = do
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message)
   receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    slab <- DUB.newSlab 1 (sz - 1)
+    slab <- DUB.newPeerlessSlab 1 (sz - 1)
     DUB.receiveMany sock slab
 
 -- This test involves a made up protocol that goes like this:
@@ -491,72 +476,7 @@ testStreamF megabytes = do
       PM.putMVar m port
       unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
         unhandled $ UB.receiveExactly conn (payloadBytes * 3)
-
--- Here, the sender spoofs its ip address and port.
-testDatagramSpoofA :: Assertion
-testDatagramSpoofA = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  ((),received) <- concurrently (sender m) (receiver m)
-  received @=? DIU.Message
-    (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
-    payload
-  where
-  sz = 16
-  payload = E.fromList (enumFromTo (0 :: Word8) (fromIntegral sz - 1))
-  sender :: PM.MVar RealWorld Word16 -> IO ()
-  sender m = unhandled $ DIS.withSocket $ \sock -> do
-    dstPort <- PM.takeMVar m
-    marr <- PM.newByteArray sz
-    PM.copyByteArray marr 0 payload 0 sz
-    unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
-      (DIU.Peer IPv4.loopback dstPort)
-      marr 0 sz
-  receiver :: PM.MVar RealWorld Word16 -> IO DIU.Message
-  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
-    PM.putMVar m port
-    unhandled $ DUB.receiveFromIPv4 sock 500
       
--- Here, the sender spoofs its ip address and port twice, picking a
--- different port each time.
-testDatagramSpoofB :: Assertion
-testDatagramSpoofB = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  ((),received) <- concurrently (sender m) (receiver m)
-  received @=?
-    ( DIU.Message
-      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
-      payloadA
-    , DIU.Message
-      (DIU.Peer (IPv4.fromOctets 9 8 7 6) 59999)
-      payloadB
-    )
-  where
-  sz = 16
-  payloadA = E.fromList (enumFromTo (1 :: Word8) (fromIntegral sz))
-  payloadB = E.fromList (enumFromTo (2 :: Word8) (fromIntegral sz + 1))
-  sender :: PM.MVar RealWorld Word16 -> IO ()
-  sender m = unhandled $ DIS.withSocket $ \sock -> do
-    dstPort <- PM.takeMVar m
-    marrA <- PM.newByteArray sz
-    marrB <- PM.newByteArray sz
-    PM.copyByteArray marrA 0 payloadA 0 sz
-    PM.copyByteArray marrB 0 payloadB 0 sz
-    unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Peer (IPv4.fromOctets 8 7 6 5) 60000)
-      (DIU.Peer IPv4.loopback dstPort)
-      marrA 0 sz
-    unhandled $ DIS.sendMutableByteArray sock
-      (DIU.Peer (IPv4.fromOctets 9 8 7 6) 59999)
-      (DIU.Peer IPv4.loopback dstPort)
-      marrB 0 sz
-  receiver :: PM.MVar RealWorld Word16 -> IO (DIU.Message,DIU.Message)
-  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
-    PM.putMVar m port
-    msg1 <- unhandled $ DUB.receiveFromIPv4 sock 500
-    msg2 <- unhandled $ DUB.receiveFromIPv4 sock 500
-    return (msg1,msg2)
-
 testStreamE :: Assertion
 testStreamE = do
   (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar

@@ -291,6 +291,7 @@ library
     Socket.Stream.IPv4
     Socket.Datagram.Interruptible.Bytes
     Socket.Datagram.Interruptible.MutableBytes
+    Socket.Datagram.Slab
     Socket.Datagram.Uninterruptible.Bytes
     Socket.Datagram.Uninterruptible.MutableBytes
     Socket.Stream.Interruptible.Addr
@@ -538,10 +539,11 @@ executable sockets-example
   if flag(example)
     build-depends:
       , base >= 4.11.1.0 && < 5
-      , sockets
-      , ip >= 1.4.1
+      , byteslice >= 0.1.1 && < 0.2
       , bytestring >= 0.10.8.2
       , fast-logger >= 2.4.13
+      , ip >= 1.4.1
+      , sockets
     if flag(checked)
       build-depends: primitive-checked >= 0.7 && <0.8
     else

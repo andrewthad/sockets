@@ -12,12 +12,10 @@ module Socket.MutableBytes.Peerless
 import Prelude hiding (length)
 
 import Data.Bytes.Types (MutableBytes(..))
-import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import Foreign.C.Error (Errno)
 import Foreign.C.Types (CInt,CSize)
 import GHC.Exts (RealWorld)
 import Posix.Socket (MessageFlags,Message(Receive))
-import Posix.Socket (SocketAddressInternet)
 import System.Posix.Types (Fd)
 import qualified Posix.Socket as S
 

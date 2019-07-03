@@ -13,12 +13,11 @@
 module Socket.IPv4
   ( Peer(..)
   , Message(..)
-  , Receipt(..)
-  , Slab(..)
+  , IPv4Slab(..)
   , SocketException(..)
   , describeEndpoint
-  , freezeSlab
-  , newSlabIPv4
+  , freezeIPv4Slab
+  , newIPv4Slab
   ) where
 
 import Control.Exception (Exception)
@@ -49,20 +48,16 @@ data Peer = Peer
   , port :: !Word16
   } deriving stock (Eq,Show)
 
+-- | A message received from a peer.
 data Message = Message
   { peer :: {-# UNPACK #-} !Peer
   , payload :: !ByteArray
   } deriving stock (Eq,Show)
 
-data Receipt = Receipt
-  { peer :: {-# UNPACK #-} !Peer
-  , size :: !Int
-  } deriving stock (Eq,Show)
-
 -- | A slab of memory for bulk datagram ingest (via @recvmmsg@). This
 -- approach cuts down on allocations. Slabs are not safe for concurrent
 -- access. Do not share a slab across multiple threads.
-data Slab = Slab
+data IPv4Slab = IPv4Slab
   { sizes :: !(MutablePrimArray RealWorld CInt)
     -- ^ Buffer for returned datagram lengths
   , peers :: !(MutablePrimArray RealWorld S.SocketAddressInternet)
@@ -72,12 +67,12 @@ data Slab = Slab
   }
 
 -- | Allocate a slab that is used to receive multiple datagrams at
--- the same time.
-newSlabIPv4 ::
+-- the same time, additionally storing the IPv4 addresses of the peers.
+newIPv4Slab ::
      Int -- ^ maximum datagrams
   -> Int -- ^ maximum size of individual datagram 
-  -> IO Slab
-newSlabIPv4 !n !m = if n >= 1 && m >= 1
+  -> IO IPv4Slab
+newIPv4Slab !n !m = if n >= 1 && m >= 1
   then do
     sizes <- PM.newPrimArray n
     peers <- PM.newPrimArray n
@@ -88,7 +83,7 @@ newSlabIPv4 !n !m = if n >= 1 && m >= 1
             go (ix - 1)
           else pure ()
     go (n - 1)
-    pure Slab{sizes,peers,payloads}
+    pure IPv4Slab{sizes,peers,payloads}
   else die "newSlabIPv4"
 
 -- This is used internally for debug messages and for presenting
@@ -102,7 +97,7 @@ describeEndpoint (Peer {address,port}) =
 --
 -- ==== __Discussion__
 --
--- The recoverable exceptions that we from stream sockets (established
+-- The recoverable exceptions that we encounter with stream sockets (established
 -- with @socket@-@bind@-@listen@) and datagram sockets (established with
 -- @socket@-@bind@) are the exact same exceptions. Consequently, we reuse
 -- the same type in both case. It is a little unfortunate since the name
@@ -130,13 +125,20 @@ data SocketException :: Type where
 deriving stock instance Show SocketException
 deriving anyclass instance Exception SocketException
 
-freezeSlab :: Slab -> Int -> IO (SmallArray Message)
-freezeSlab slab n = do
+-- | Freeze the specified number of messages in-place and return
+-- them (along with their origin peers). Replaces all of the frozen
+-- messages with tombstones so that new buffers can be allocated
+-- before the next reception. End users should not need this function.
+freezeIPv4Slab ::
+     IPv4Slab -- ^ The slab
+  -> Int -- ^ Number of messages in the slab.
+  -> IO (SmallArray Message)
+freezeIPv4Slab slab n = do
   msgs <- PM.newSmallArray n errorThunk
   freezeSlabGo slab msgs (n - 1)
 
-freezeSlabGo :: Slab -> SmallMutableArray RealWorld Message -> Int -> IO (SmallArray Message)
-freezeSlabGo slab@Slab{payloads,peers,sizes} !arr !ix = if ix > (-1)
+freezeSlabGo :: IPv4Slab -> SmallMutableArray RealWorld Message -> Int -> IO (SmallArray Message)
+freezeSlabGo slab@IPv4Slab{payloads,peers,sizes} !arr !ix = if ix > (-1)
   then do
     !size <- PM.readPrimArray sizes ix
     !sockaddr <- PM.readPrimArray peers ix

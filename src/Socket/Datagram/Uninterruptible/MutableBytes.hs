@@ -15,6 +15,13 @@ module Socket.Datagram.Uninterruptible.MutableBytes
     -- * Receive Many
   , MM.receiveMany
   , MM.receiveManyFromIPv4
+    -- * Slabs
+    -- ** Types
+  , PeerlessSlab(..)
+  , IPv4Slab(..)
+    -- ** Functions
+  , newPeerlessSlab
+  , newIPv4Slab
   ) where
 
 import Data.Bytes.Types (MutableBytes)
@@ -23,7 +30,8 @@ import GHC.Exts (RealWorld,proxy#)
 import Posix.Socket (SocketAddressInternet)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Socket.IPv4 (Peer)
+import Socket.IPv4 (Peer,newIPv4Slab,IPv4Slab(..))
+import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Many as MM
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected as CR

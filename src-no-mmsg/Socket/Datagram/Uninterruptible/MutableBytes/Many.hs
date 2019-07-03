@@ -15,7 +15,7 @@ import GHC.IO (IO(..))
 import Socket (Interruptibility(Uninterruptible))
 import Socket (Connectedness(..))
 import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.IPv4 (Slab(..))
+import Socket.IPv4 (IPv4Slab(..))
 
 import qualified Socket.Discard
 import qualified Socket as SCK
@@ -33,10 +33,10 @@ import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.IPv4 
 receiveMany :: 
      Socket c a
      -- ^ Socket
-  -> Socket.Discard.Slab
+  -> Socket.Discard.PeerlessSlab
      -- ^ Buffers into which sizes and payloads are received
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
-receiveMany (Socket fd) (Socket.Discard.Slab{sizes,payloads}) =
+receiveMany (Socket fd) (Socket.Discard.PeerlessSlab{sizes,payloads}) =
   RU.receiveMany proxy# fd sizes () payloads
 
 -- | Variant of 'receiveMany' that provides that source address
@@ -44,9 +44,9 @@ receiveMany (Socket fd) (Socket.Discard.Slab{sizes,payloads}) =
 -- to the structure-of-arrays.
 receiveManyFromIPv4 :: 
      Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.Slab
+  -> Socket.IPv4.IPv4Slab
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
-receiveManyFromIPv4 (Socket fd) (Socket.IPv4.Slab{sizes,peers,payloads}) =
+receiveManyFromIPv4 (Socket fd) (Socket.IPv4.IPv4Slab{sizes,peers,payloads}) =
   RV4.receiveMany proxy# fd sizes peers payloads

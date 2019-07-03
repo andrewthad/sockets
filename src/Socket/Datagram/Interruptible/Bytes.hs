@@ -23,7 +23,7 @@ import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Interruptible))
 import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.IPv4 (Message(..),Slab(..))
+import Socket.IPv4 (Message(..),IPv4Slab(..))
 
 import qualified Data.Primitive as PM
 import qualified Socket.IPv4
@@ -73,13 +73,13 @@ receiveManyFromIPv4 ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.Slab -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (SmallArray Message))
 receiveManyFromIPv4 intr sock slab = do
   MM.receiveManyFromIPv4 intr sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
-      arr <- Socket.IPv4.freezeSlab slab n
+      arr <- Socket.IPv4.freezeIPv4Slab slab n
       pure (Right arr)
 
 receiveMany ::
@@ -87,11 +87,11 @@ receiveMany ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.Discard.Slab -- ^ Buffers for reception
+  -> Socket.Discard.PeerlessSlab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (UnliftedArray ByteArray))
 receiveMany intr sock slab = do
   MM.receiveMany intr sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
-      arr <- Socket.Discard.freezeSlab slab n
+      arr <- Socket.Discard.freezePeerlessSlab slab n
       pure (Right arr)

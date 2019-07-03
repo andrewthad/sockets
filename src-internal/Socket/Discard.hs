@@ -11,9 +11,9 @@
 {-# language UnboxedTuples #-}
 
 module Socket.Discard
-  ( Slab(..)
-  , newSlab
-  , freezeSlab
+  ( PeerlessSlab(..)
+  , newPeerlessSlab
+  , freezePeerlessSlab
   ) where
 
 import Control.Monad.Primitive (primitive,primitive_)
@@ -30,7 +30,10 @@ import qualified GHC.Exts as Exts
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.Unlifted.Array as PM
 
-data Slab = Slab
+-- | A slab of memory for bulk datagram ingest (via @recvmmsg@).
+-- Slabs are not safe for concurrent access. This variant does
+-- not have space for the peer addresses.
+data PeerlessSlab = PeerlessSlab
   { sizes :: !(MutablePrimArray RealWorld CInt)
     -- ^ Buffer for returned datagram lengths
   , payloads :: !(MutableUnliftedArray RealWorld (MutableByteArray RealWorld))
@@ -38,12 +41,12 @@ data Slab = Slab
   }
 
 -- | Allocate a slab that is used to receive multiple datagrams at
--- the same time.
-newSlab ::
+-- the same time without receiving any information about the peer.
+newPeerlessSlab ::
      Int -- ^ maximum datagrams
   -> Int -- ^ maximum size of individual datagram 
-  -> IO Slab
-newSlab !n !m = if n >= 1 && m >= 1
+  -> IO PeerlessSlab
+newPeerlessSlab !n !m = if n >= 1 && m >= 1
   then do
     sizes <- PM.newPrimArray n
     payloads <- PM.unsafeNewUnliftedArray n
@@ -53,20 +56,24 @@ newSlab !n !m = if n >= 1 && m >= 1
             go (ix - 1)
           else pure ()
     go (n - 1)
-    pure Slab{sizes,payloads}
+    pure PeerlessSlab{sizes,payloads}
   else die "newSlab"
 
-freezeSlab :: Slab -> Int -> IO (UnliftedArray ByteArray)
-freezeSlab slab n = do
+-- | Freeze the specified number of messages in-place and return
+-- them Replaces all of the frozen messages with tombstones so that
+-- new buffers can be allocated before the next reception. End users
+-- should not need this function.
+freezePeerlessSlab :: PeerlessSlab -> Int -> IO (UnliftedArray ByteArray)
+freezePeerlessSlab slab n = do
   msgs <- PM.unsafeNewUnliftedArray n
   freezeSlabGo slab msgs (n - 1)
 
 freezeSlabGo ::
-     Slab
+     PeerlessSlab
   -> MutableUnliftedArray RealWorld ByteArray
   -> Int
   -> IO (UnliftedArray ByteArray)
-freezeSlabGo slab@Slab{payloads,sizes} !arr !ix = if ix > (-1)
+freezeSlabGo slab@PeerlessSlab{payloads,sizes} !arr !ix = if ix > (-1)
   then do
     !size <- PM.readPrimArray sizes ix
     -- Remove the byte array from the array of payloads, freeze it, and

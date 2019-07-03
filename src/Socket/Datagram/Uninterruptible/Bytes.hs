@@ -11,8 +11,8 @@ module Socket.Datagram.Uninterruptible.Bytes
   ( -- * Send
     send
   , sendToIPv4
-  , -- * Receive
-    receive
+    -- * Receive
+  , receive
   , receiveFromIPv4
     -- * Receive Many
   , receiveMany
@@ -22,8 +22,12 @@ module Socket.Datagram.Uninterruptible.Bytes
   , Peer(..)
   , ReceiveException(..)
     -- * Slabs
-  , newSlab
-  , newSlabIPv4
+    -- ** Types
+  , PeerlessSlab(..)
+  , IPv4Slab(..)
+    -- ** Functions
+  , newPeerlessSlab
+  , newIPv4Slab
   ) where
 
 import Data.Bytes.Types (Bytes,MutableBytes(..))
@@ -34,9 +38,9 @@ import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
-import Socket.IPv4 (Peer(..),Message(..),Slab(..),freezeSlab)
-import Socket.IPv4 (newSlabIPv4)
-import Socket.Discard (newSlab)
+import Socket.IPv4 (Peer(..),Message(..),IPv4Slab(..),freezeIPv4Slab)
+import Socket.IPv4 (newIPv4Slab)
+import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 
 import qualified Data.Primitive as PM
 import qualified Socket.Discard
@@ -95,22 +99,22 @@ receiveFromIPv4 (Socket !sock) !maxSz = do
 
 receiveManyFromIPv4 ::
      Socket 'Unconnected ('Internet 'V4) -- ^ Socket
-  -> Socket.IPv4.Slab -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Uninterruptible) (SmallArray Message))
 receiveManyFromIPv4 sock slab = do
   MM.receiveManyFromIPv4 sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
-      arr <- Socket.IPv4.freezeSlab slab n
+      arr <- Socket.IPv4.freezeIPv4Slab slab n
       pure (Right arr)
 
 receiveMany ::
      Socket 'Unconnected ('Internet 'V4) -- ^ Socket
-  -> Socket.Discard.Slab -- ^ Buffers for reception
+  -> Socket.Discard.PeerlessSlab -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Uninterruptible) (UnliftedArray ByteArray))
 receiveMany sock slab = do
   MM.receiveMany sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
-      arr <- Socket.Discard.freezeSlab slab n
+      arr <- Socket.Discard.freezePeerlessSlab slab n
       pure (Right arr)

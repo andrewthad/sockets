@@ -15,6 +15,7 @@ module Socket.Stream.IPv4
   , Connection(..)
   , Peer(..)
     -- * Bracketed
+    -- $brackeded
   , withListener
   , withAccepted
   , withConnection
@@ -170,6 +171,7 @@ unlisten (Listener fd) = S.uninterruptibleClose fd >>= \case
 unlisten_ :: Listener -> IO ()
 unlisten_ (Listener fd) = S.uninterruptibleErrorlessClose fd
 
+-- | Open a socket that is used to listen for inbound connections.
 withListener ::
      Peer
   -> (Listener -> Word16 -> IO a)
@@ -771,6 +773,18 @@ handleAcceptException e
 
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
+
+{- $bracketed
+ 
+Bracketed resource-acquisition functions ensure that a network socket
+(represented by 'Listener' or 'Connection') gets closed if an exception
+happens. This prevents file descriptor leaks. Note that functions in
+this library generally do not throw exceptions. That is to say that the
+exceptions these bracketed functions encounter will be the result of the
+end user calling 'throwIO' inside the callback or calling 'throwTo' from
+another thread.
+
+-}
 
 {- $unbracketed
  

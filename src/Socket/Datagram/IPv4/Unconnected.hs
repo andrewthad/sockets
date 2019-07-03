@@ -18,8 +18,6 @@ module Socket.Datagram.IPv4.Unconnected
   , withSocket
     -- * Exceptions
   , SocketException(..)
-    -- * Examples
-    -- $examples
   ) where
 
 import Control.Exception (mask,onException)
@@ -107,31 +105,6 @@ endpointToSocketAddressInternet (Peer {address, port}) = S.SocketAddressInternet
   { port = S.hostToNetworkShort port
   , address = S.hostToNetworkLong (getIPv4 address)
   }
-
-{- $examples
- 
-Print every UDP packet that we receive. This terminates, closing the
-socket, after receiving ten packets. This code throws any exception that
-happens. This is commonly a useful behavior since most exceptions cannot
-be handled gracefully.
-
-> import qualified Data.ByteString.Char8 as BC
-> import Control.Monad (replicateM_)
-> import qualified Data.ByteString.Short.Internal as SB
-> 
-> udpStdoutServer :: IO ()
-> udpStdoutServer = do
->   unhandled $ withSocket (Peer IPv4.loopback 0) $ \sock port -> do
->     BC.putStrLn ("Receiving datagrams on 127.0.0.1:" <> BC.pack (show port))
->     replicateM_ 10 $ do
->     DIU.Message sender (ByteArray contents) <- unhandled (DIU.receive sock 1024)
->       BC.putStrLn ("Datagram from " <> BC.pack (show sender))
->       BC.putStr (SB.fromShort (SB.SBS contents))
-> 
-> unhandled :: Exception e => IO (Either e a) -> IO a
-> unhandled action = action >>= either throwIO pure
-
--}
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
