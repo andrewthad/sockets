@@ -29,7 +29,7 @@ main :: IO ()
 main = do
   portStr <- lookupEnv "PORT"
   let port = maybe 8888 id (readMaybe =<< portStr)
-  err <- S.withListener (S.Endpoint{S.address=IPv4.any,S.port}) $ \lstn _ -> do
+  err <- S.withListener (S.Peer{S.address=IPv4.any,S.port}) $ \lstn _ -> do
     let go = do
           e <- S.forkAcceptedUnmasked lstn
             (\e () -> either handleCloseException pure e)
@@ -53,7 +53,7 @@ echoStage1 !conn !buffer = do
       -- For some reason, wrk resets the connections when it finishes
       -- instead of shutting them down gracefully.
       S.ReceiveReset -> pure ()
-      -- _ -> BC.hPutStrLn stderr (BC.pack (show err))
+      S.ReceiveHostUnreachable -> BC.hPutStrLn stderr "While receiving, peer became unreachable." 
     Right n -> echoStage2 conn buffer n
 
 -- precondition: total >= 4
