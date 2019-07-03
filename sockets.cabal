@@ -122,7 +122,7 @@ library sockets-internal
     hs-source-dirs: src-noerr
   hs-source-dirs: src-internal
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-interrupt
   build-depends:
@@ -133,14 +133,14 @@ library sockets-interrupt
   signatures: Socket.Interrupt
   hs-source-dirs: src-interrupt
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-buffer
   build-depends: base >= 4.11.1.0 && <5
   signatures: Socket.Buffer
   hs-source-dirs: src-buffer
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-datagram-send
   build-depends:
@@ -157,7 +157,7 @@ library sockets-datagram-send
     Datagram.Send
   hs-source-dirs: src-datagram-send
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-datagram-receive
   build-depends:
@@ -175,7 +175,7 @@ library sockets-datagram-receive
     Datagram.Receive
   hs-source-dirs: src-datagram-receive
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 -- This is only used as a shim for when the platform does not
 -- support recvmmsg. It lets us share code for the interruptible
@@ -203,7 +203,7 @@ library sockets-datagram-receive-many
       requires
       (Socket.Buffer as Socket.MutableBytes)
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-stream-send
   build-depends:
@@ -220,7 +220,7 @@ library sockets-stream-send
     Stream.Send
   hs-source-dirs: src-stream-send
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-stream-receive
   build-depends:
@@ -237,7 +237,7 @@ library sockets-stream-receive
     Stream.Receive
   hs-source-dirs: src-stream-receive
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 library sockets-stream-send-two
   build-depends:
@@ -263,7 +263,7 @@ library sockets-stream-send-two
        Stream.Send as Stream.Send.B)
   hs-source-dirs: src-stream-send-two
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 -- Here, we partially apply the indefinite packages for
 -- stream send and stream receive. The avoids duplication
@@ -282,6 +282,7 @@ library sockets-stream-bidirectional
   mixins:
       sockets-stream-send (Stream.Send.Indefinite)
     , sockets-stream-receive (Stream.Receive.Indefinite)
+  default-language: Haskell2010
 
 library
   exposed-modules:
@@ -477,7 +478,7 @@ library
   else
     hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -ddump-simpl -dsuppress-all -ddump-to-file
+  ghc-options: -O2 -Wall
 
 test-suite test
   type: exitcode-stdio-1.0
