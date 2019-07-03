@@ -12,7 +12,7 @@
 module Socket.Stream.IPv4
   ( -- * Types
     Listener
-  , Connection
+  , Connection(..)
   , Peer(..)
     -- * Bracketed
   , withListener

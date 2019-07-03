@@ -47,7 +47,7 @@ echoStage1 :: Connection -> MutableByteArray RealWorld -> IO ()
 echoStage1 !conn !buffer = do
   Mutable.receiveBetween conn (MutableBytes buffer 0 bufSize) 4 >>= \case
     Left err -> case err of
-      -- A shutdown right here is expected for http client's that do not
+      -- A shutdown right here is expected for http clients that do not
       -- reuse connections.
       S.ReceiveShutdown -> pure ()
       -- For some reason, wrk resets the connections when it finishes
@@ -70,7 +70,7 @@ echoStage2 !sock !buffer !total = do
     else do
       let remaining = bufSize - total
       if remaining > 0
-        then Mutable.receiveOnce sock (MutableBytes buffer 0 remaining) >>= \case
+        then Mutable.receiveOnce sock (MutableBytes buffer total remaining) >>= \case
           Left err -> BC.hPutStrLn stderr (BC.pack (show err))
           Right n -> echoStage2 sock buffer (total + n)
         else BC.hPutStrLn stderr "Buffer exhausted"
