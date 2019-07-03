@@ -286,7 +286,6 @@ library sockets-stream-bidirectional
 library
   exposed-modules:
     Socket.Address
-    Socket.Datagram.IPv4.Spoof
     Socket.Datagram.IPv4.Unconnected
     Socket.Datagram.IPv4.Connected
     Socket.Stream.IPv4
