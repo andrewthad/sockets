@@ -12,6 +12,8 @@
 module Socket.Datagram.IPv4.Unconnected
   ( -- * Types
     Socket(..)
+  , Family(..)
+  , Connectedness(..)
   , Peer(..)
   , Message(..)
     -- * Establish
@@ -26,7 +28,7 @@ import Foreign.C.Error (Errno(..),eACCES)
 import Foreign.C.Error (eNFILE,eMFILE,eADDRINUSE)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (Connectedness(Unconnected))
+import Socket (Connectedness(..),Family(..))
 import Socket.Datagram (Socket(..))
 import Socket.Datagram (SocketException(..))
 import Socket.Debug (debug)

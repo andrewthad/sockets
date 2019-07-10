@@ -13,6 +13,8 @@
 module Socket.Datagram.IPv4.Connected
   ( -- * Types
     Socket(..)
+  , Family(..)
+  , Connectedness(..)
   , Peer(..)
   , Message(..)
     -- * Establish
@@ -29,7 +31,7 @@ import Foreign.C.Error (Errno(..),eACCES)
 import Foreign.C.Error (eNFILE,eMFILE,eADDRINUSE)
 import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
-import Socket (Connectedness(Connected))
+import Socket (Connectedness(..),Family(..))
 import Socket.Datagram (Socket(..))
 import Socket.Datagram (SocketException(..))
 import Socket.IPv4 (Peer(..),Message(..))

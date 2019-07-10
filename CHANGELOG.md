@@ -1,5 +1,14 @@
 # Revision history for stream-sockets
 
+## 0.4.1.0
+
+* Add support for using `Addr` and `ByteString` with datagram sockets.
+* Add sendMany for vectored io on a stream socket.
+
+## 0.4.0.0
+
+* Overhaul the interface. Aggressively use backpack.
+
 ## 0.3.1.0
 
 * Add functions for sending strict bytestrings and lazy bytestrings

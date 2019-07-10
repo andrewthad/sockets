@@ -1,7 +1,8 @@
 {-# language BangPatterns #-}
-{-# language LambdaCase #-}
 {-# language DataKinds #-}
+{-# language LambdaCase #-}
 {-# language MagicHash #-}
+{-# language ScopedTypeVariables #-}
 
 module Socket.Stream.Uninterruptible.ByteString
   ( send
@@ -10,16 +11,15 @@ module Socket.Stream.Uninterruptible.ByteString
   , receiveBetween
   ) where
 
+import Data.ByteString (ByteString)
 import Data.Bytes.Types (UnmanagedBytes(..))
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
-import Data.ByteString.Internal (ByteString(PS))
 import Data.Primitive.Addr (Addr(..))
-import Data.Primitive (MutableByteArray(..))
 import Data.Bytes.Types (MutableBytes(..))
-import GHC.Exts (Ptr(Ptr),RealWorld,byteArrayContents#,unsafeCoerce#,proxy#)
-import GHC.ForeignPtr (ForeignPtr(ForeignPtr),ForeignPtrContents(PlainPtr))
+import GHC.Exts (Ptr(Ptr),proxy#)
 import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Uninterruptible))
+import Socket.Interop (fromPinned)
 
 import qualified Data.Primitive as PM
 import qualified Socket.Stream.Uninterruptible.Addr.Send as Send
@@ -47,7 +47,7 @@ receiveExactly !conn !n = do
   !marr <- PM.newPinnedByteArray n
   Receive.receiveExactly proxy# conn (MutableBytes marr 0 n) >>= \case
     Left err -> pure (Left err)
-    Right _ -> pure $! Right $! fromManaged marr 0 n
+    Right (_ :: ()) -> pure $! Right $! fromPinned marr 0 n
 
 -- | Receive at most the specified number of bytes. This
 -- only makes multiple calls to POSIX @recv@ if EAGAIN is returned. It makes at
@@ -61,9 +61,7 @@ receiveOnce !conn !n = do
   !marr0 <- PM.newPinnedByteArray n
   Receive.receiveOnce proxy# conn (MutableBytes marr0 0 n) >>= \case
     Left err -> pure (Left err)
-    Right sz -> do
-      marr1 <- PM.resizeMutableByteArray marr0 sz
-      pure $! Right $! fromManaged marr1 0 sz
+    Right sz -> pure $! Right $! fromPinned marr0 0 sz
 
 -- | Receive a number of bytes that is between the inclusive lower and
 --   upper bounds. If needed, this may call @recv@ repeatedly until the
@@ -78,12 +76,4 @@ receiveBetween !conn !minLen !maxLen = do
   !marr0 <- PM.newPinnedByteArray maxLen
   Receive.receiveBetween proxy# conn (MutableBytes marr0 0 maxLen) minLen >>= \case
     Left err -> pure (Left err)
-    Right sz -> do
-      marr1 <- PM.resizeMutableByteArray marr0 sz
-      pure $! Right $! fromManaged marr1 0 sz
-
-fromManaged :: MutableByteArray RealWorld -> Int -> Int -> ByteString
-{-# inline fromManaged #-}
-fromManaged (MutableByteArray marr#) off len =
-  PS (ForeignPtr (byteArrayContents# (unsafeCoerce# marr#)) (PlainPtr marr#)) off len
-
+    Right sz -> pure $! Right $! fromPinned marr0 0 sz

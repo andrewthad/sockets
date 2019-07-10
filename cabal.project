@@ -1,0 +1,2 @@
+packages: . ../posix-api
+flags: +checked +assertions +verbose-errors

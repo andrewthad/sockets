@@ -1,6 +1,6 @@
 cabal-version: 2.2
 name: sockets
-version: 0.4.0.0
+version: 0.4.1.0
 synopsis: High-level network sockets
 description:
   This library provides a high-level abstraction for network sockets. It uses
@@ -79,6 +79,7 @@ flag example
 library sockets-internal
   build-depends:
     , base >= 4.11.1.0 && <5
+    , bytestring >=0.10 && <0.11
     , ip >= 1.4.1
     , posix-api >=0.3 && <0.4
     , primitive-offset >= 0.2 && <0.3
@@ -94,6 +95,7 @@ library sockets-internal
   exposed-modules:
     Socket
     Socket.AddrLength
+    Socket.Connected.UnmanagedBytes
     Socket.Datagram
     Socket.Debug
     Socket.Error
@@ -101,6 +103,7 @@ library sockets-internal
     Socket.IPv4
     Socket.Stream
     Socket.Bytes
+    Socket.Destined.IPv4.UnmanagedBytes
     Socket.Destined.IPv4.MutableBytes
     Socket.Destined.IPv4.Bytes
     Socket.Discard
@@ -109,8 +112,11 @@ library sockets-internal
     Socket.MutableBytes
     Socket.MutableBytes.Peerless
     Socket.MutableBytes.SocketAddressInternet
+    Socket.UnmanagedBytes.Peerless
+    Socket.UnmanagedBytes.SocketAddressInternet
     Socket.Interruptible
     Socket.Uninterruptible
+    Socket.Interop
     Hybrid.Send.MutableBytes.AddrLength
   if flag(debug)
     hs-source-dirs: src-debug
@@ -290,10 +296,14 @@ library
     Socket.Datagram.IPv4.Unconnected
     Socket.Datagram.IPv4.Connected
     Socket.Stream.IPv4
+    Socket.Datagram.Interruptible.Addr
     Socket.Datagram.Interruptible.Bytes
+    Socket.Datagram.Interruptible.ByteString
     Socket.Datagram.Interruptible.MutableBytes
     Socket.Datagram.Slab
+    Socket.Datagram.Uninterruptible.Addr
     Socket.Datagram.Uninterruptible.Bytes
+    Socket.Datagram.Uninterruptible.ByteString
     Socket.Datagram.Uninterruptible.MutableBytes
     Socket.Stream.Interruptible.Addr
     Socket.Stream.Interruptible.ByteString
@@ -336,6 +346,18 @@ library
        Socket.Interrupt as Socket.Uninterruptible,
        Socket.Buffer as Socket.MutableBytes),
     sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.Addr.Send.IPv4)
+      requires
+      (Datagram.Send as Socket.Destined.IPv4.UnmanagedBytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.AddrLength),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Interruptible.Addr.Send.IPv4)
+      requires
+      (Datagram.Send as Socket.Destined.IPv4.UnmanagedBytes,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.AddrLength),
+    sockets-datagram-send
       (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.Bytes.Send.Connected)
       requires
       (Datagram.Send as Socket.Connected.Bytes,
@@ -365,12 +387,36 @@ library
       (Datagram.Send as Socket.Connected.MutableBytes,
        Socket.Interrupt as Socket.Interruptible,
        Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Interruptible.Addr.Send.Connected)
+      requires
+      (Datagram.Send as Socket.Connected.UnmanagedBytes,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.AddrLength),
+    sockets-datagram-send
+      (Datagram.Send.Indefinite as Socket.Datagram.Uninterruptible.Addr.Send.Connected)
+      requires
+      (Datagram.Send as Socket.Connected.UnmanagedBytes,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.AddrLength),
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.IPv4)
       requires
       (Datagram.Receive as Socket.MutableBytes.SocketAddressInternet,
        Socket.Interrupt as Socket.Uninterruptible,
        Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.Addr.Receive.IPv4)
+      requires
+      (Datagram.Receive as Socket.UnmanagedBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.AddrLength),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.Addr.Receive.IPv4)
+      requires
+      (Datagram.Receive as Socket.UnmanagedBytes.SocketAddressInternet,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.AddrLength),
     sockets-datagram-receive
       (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.MutableBytes.Receive.IPv4)
       requires
@@ -389,6 +435,18 @@ library
       (Datagram.Receive as Socket.MutableBytes.Peerless,
        Socket.Interrupt as Socket.Interruptible,
        Socket.Buffer as Socket.MutableBytes),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Interruptible.Addr.Receive.Connected)
+      requires
+      (Datagram.Receive as Socket.UnmanagedBytes.Peerless,
+       Socket.Interrupt as Socket.Interruptible,
+       Socket.Buffer as Socket.AddrLength),
+    sockets-datagram-receive
+      (Datagram.Receive.Indefinite as Socket.Datagram.Uninterruptible.Addr.Receive.Connected)
+      requires
+      (Datagram.Receive as Socket.UnmanagedBytes.Peerless,
+       Socket.Interrupt as Socket.Uninterruptible,
+       Socket.Buffer as Socket.AddrLength),
     sockets-stream-send
       (Stream.Send.Indefinite as Socket.Stream.Interruptible.Bytes.Send)
       requires
