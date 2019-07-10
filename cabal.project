@@ -1,2 +1,5 @@
-packages: . ../posix-api
-flags: +checked +assertions +verbose-errors
+packages: .
+source-repository-package
+  type: git
+  location: https://github.com/andrewthad/posix-api
+  tag: 6344f841b969cb70195e49093be1504b4a84f7c5
