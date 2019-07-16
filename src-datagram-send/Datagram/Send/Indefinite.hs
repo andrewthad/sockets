@@ -9,6 +9,7 @@ module Datagram.Send.Indefinite
 import Control.Concurrent.STM (TVar)
 import Datagram.Send (Peer)
 import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eACCES)
+import Foreign.C.Error (eCONNREFUSED)
 import Foreign.C.Types (CSize)
 import Socket.Error (die)
 import Socket.EventManager (Token)
@@ -26,7 +27,12 @@ import qualified Datagram.Send as Send
 -- POSIX @send@. This is used for datagram sockets. We cannot use a
 -- Socket newtype here since destined and undestined sockets
 -- use different newtypes.
-send :: Interrupt -> Peer -> Fd -> Buffer -> IO (Either (SendException Intr) ())
+send ::
+     Interrupt
+  -> Peer
+  -> Fd
+  -> Buffer
+  -> IO (Either (SendException Intr) ())
 send !intr !dst !sock !buf = do
   let !mngr = EM.manager
   tv <- EM.writer mngr sock
@@ -48,6 +54,7 @@ sendLoop !intr !dst !sock !tv !old !buf =
                Left err -> pure (Left err)
                Right _ -> sendLoop intr dst sock tv new buf
          | e == eACCES -> pure (Left SendBroadcasted)
+         | e == eCONNREFUSED -> pure (Left SendConnectionRefused)
          | otherwise -> die ("Socket.Datagram.send: " ++ describeErrorCode e)
     Right sz -> if csizeToInt sz == Buffer.length buf
       then pure $! Right ()

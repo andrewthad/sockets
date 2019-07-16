@@ -9,7 +9,7 @@ module Datagram.Receive.Indefinite
   ) where
 
 import Control.Concurrent.STM (TVar)
-import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK)
+import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eCONNREFUSED)
 import Foreign.C.Types (CSize)
 import Socket.Error (die)
 import Socket.EventManager (Token)
@@ -55,12 +55,13 @@ receiveAttempt !fd !buf !addrBuf = do
   -- we return an exception.
   e <- Receive.receiveFromOnce fd buf L.truncate addrBuf
   case e of
-    Left err -> if err == eWOULDBLOCK || err == eAGAIN
-      then pure (Right Nothing)
-      else die $ concat
-        [ "Socket.Datagram.receive: " 
-        , describeErrorCode err
-        ]
+    Left err ->
+      if | err == eWOULDBLOCK || err == eAGAIN -> pure (Right Nothing)
+         | err == eCONNREFUSED -> pure (Left ReceiveConnectionRefused)
+         | otherwise -> die $ concat
+             [ "Socket.Datagram.receive: " 
+             , describeErrorCode err
+             ]
     Right recvSz -> do
       let !recvSzInt = csizeToInt recvSz
       if recvSzInt <= Buffer.length buf

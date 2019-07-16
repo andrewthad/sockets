@@ -57,6 +57,7 @@ tests = testGroup "socket"
         , testCase "D" testDatagramUndestinedD
         , testCase "E" testDatagramUndestinedE
         , testCase "F" testDatagramUndestinedF
+        , testCase "G" testDatagramUndestinedG
         ]
       , testGroup "connected"
         [ testCase "A" testDatagramConnectedA
@@ -296,6 +297,23 @@ testDatagramUndestinedF = do
     PM.putMVar m port
     slab <- DUB.newPeerlessSlab 1 (sz - 1)
     DUB.receiveMany sock slab
+
+testDatagramUndestinedG :: Assertion
+testDatagramUndestinedG = do
+  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  received @=? message
+  where
+  message = E.fromList [0,1,2,3] :: ByteArray
+  sz = PM.sizeofByteArray message
+  sender :: PM.MVar RealWorld Word16 -> IO ()
+  sender m = unhandled $ DIU.withSocket (DUB.Peer IPv4.loopback 0) $ \sock _ -> do
+    dstPort <- PM.takeMVar m
+    unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message)
+  receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
+  receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
+    PM.putMVar m port
+    unhandled $ DUB.receive sock sz
 
 -- This test involves a made up protocol that goes like this:
 -- The sender always starts by sending the length of the rest

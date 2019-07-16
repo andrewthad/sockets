@@ -1,7 +1,9 @@
 # Revision history for stream-sockets
 
-## 0.4.1.0
+## 0.5.0.0
 
+* Add support for getting back `ECONNREFUSED` when send or receiving
+  with datagram sockets.
 * Add support for using `Addr` and `ByteString` with datagram sockets.
 * Add sendMany for vectored io on a stream socket.
 

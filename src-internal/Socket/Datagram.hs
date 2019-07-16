@@ -27,6 +27,14 @@ data SendException :: Interruptibility -> Type where
   SendTruncated :: !Int -> SendException i
   -- | Attempted to send to a broadcast address.
   SendBroadcasted :: SendException i
+  -- | A previous attempt to send to the peer failed, and
+  --   the failure is asynchronously reported via ICMP on a later
+  --   attempt to send to the peer. It is likely that the
+  --   peer is not listening on the requested port or that the
+  --   datagram could not be routed to the peer. (This is a
+  --   confusing way to notify the user of a send failure, but
+  --   it is how Linux does it.)
+  SendConnectionRefused :: SendException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   SendInterrupted :: SendException 'Interruptible
 
@@ -34,12 +42,26 @@ deriving stock instance Show (SendException i)
 deriving stock instance Eq (SendException i)
 deriving anyclass instance (Typeable i) => Exception (SendException i)
 
+-- | Exceptions that can happen while attempting to receive
+--   a datagram. 
 data ReceiveException :: Interruptibility -> Type where
   -- | The datagram did not fit in the buffer. The field is the
   --   original size of the datagram that was truncated. If
   --   this happens, the process probably needs to start using
   --   a larger receive buffer.
   ReceiveTruncated :: !Int -> ReceiveException i
+  -- | A previous attempt to send to the peer failed, and
+  --   the failure is asynchronously reported via ICMP on a later
+  --   attempt to receive from the peer. It is likely that the
+  --   peer is not listening on the requested port or that the
+  --   datagram could not be routed to the peer. Even if the user
+  --   has not sent anything, then this exception can result from
+  --   a previous socket bound to the same port. In this case,
+  --   it can be safely ignored. However, if the user has sent
+  --   something over the socket, this exception means that it
+  --   likely did not arrive. (This is a confusing way to notify
+  --   the user of a send failure, but it is how Linux does it.)
+  ReceiveConnectionRefused :: ReceiveException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   ReceiveInterrupted :: ReceiveException 'Interruptible
 
