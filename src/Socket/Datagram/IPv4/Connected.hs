@@ -21,6 +21,8 @@ module Socket.Datagram.IPv4.Connected
   , withSocket
     -- * Exceptions
   , SocketException(..)
+  , SD.ReceiveException(..)
+  , SD.SendException(..)
     -- * Examples
     -- $examples
   ) where
@@ -42,6 +44,7 @@ import qualified Linux.Socket as L
 import qualified Posix.Socket as S
 import qualified Socket as SCK
 import qualified Socket.EventManager as EM
+import qualified Socket.Datagram as SD
 
 withSocket ::
      Peer

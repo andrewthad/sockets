@@ -9,6 +9,7 @@
 
 import Control.Applicative (liftA3)
 import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (newTVarIO)
 import Control.Concurrent.Async (concurrently)
 import Control.Monad (replicateM_)
 import Control.Exception (Exception)
@@ -37,6 +38,7 @@ import qualified Net.IPv4 as IPv4
 import qualified Socket.Datagram.IPv4.Unconnected as DIU
 import qualified Socket.Datagram.IPv4.Connected as DIC
 import qualified Socket.Datagram.Uninterruptible.Bytes as DUB
+import qualified Socket.Datagram.Interruptible.Bytes as DIB
 import qualified Socket.Stream.IPv4 as SI
 import qualified Socket.Stream.Uninterruptible.Bytes as UB
 import qualified Socket.Stream.Uninterruptible.MutableBytes as UMB
@@ -61,6 +63,7 @@ tests = testGroup "socket"
         ]
       , testGroup "connected"
         [ testCase "A" testDatagramConnectedA
+        , testCase "B" testDatagramConnectedB
         ]
       ]
     ]
@@ -124,6 +127,18 @@ testDatagramConnectedA = do
   receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     unhandled $ DUB.receiveFromIPv4 sock sz
+
+testDatagramConnectedB :: Assertion
+testDatagramConnectedB = do
+  intr <- newTVarIO True
+  unhandled $ DIC.withSocket
+    (DIU.Peer IPv4.loopback 0)
+    (DIU.Peer IPv4.loopback 43245)
+    (\sock _ -> DIB.receive intr sock 42 >>= \case
+      Left DIC.ReceiveInterrupted -> pure ()
+      Left e -> throwIO e
+      Right _ -> fail "testDatagramUndestinedB: received datagram"
+    )
 
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do

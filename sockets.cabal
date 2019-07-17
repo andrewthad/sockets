@@ -553,6 +553,7 @@ test-suite test
     , byteslice >= 0.1.1
     , primitive-unlifted
     , primitive-addr
+    , stm
   if flag(checked)
     build-depends: primitive-checked >= 0.7 && <0.8
   else

@@ -82,7 +82,9 @@ receiveLoop !intr !tv !token0 !fd !buf !addrBuf = receiveAttempt fd buf addrBuf 
     Nothing -> do
       EM.unready token0 tv
       token1 <- wait intr tv
-      receiveLoop intr tv token1 fd buf addrBuf
+      case tokenToDatagramReceiveException token1 of
+        Left err -> pure (Left err)
+        Right _ -> receiveLoop intr tv token1 fd buf addrBuf
     Just !r -> pure (Right r)
 
 csizeToInt :: CSize -> Int
