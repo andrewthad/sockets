@@ -6,6 +6,8 @@
   with datagram sockets.
 * Add support for using `Addr` and `ByteString` with datagram sockets.
 * Add sendMany for vectored io on a stream socket.
+* Correct the implementation of interruptible functions that
+  work on datagram sockets.
 
 ## 0.4.0.0
 
