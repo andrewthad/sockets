@@ -14,8 +14,7 @@ import Prelude hiding (length)
 
 import Data.Bytes.Types (UnmanagedBytes(UnmanagedBytes))
 import Foreign.C.Error (Errno)
-import Foreign.C.Types (CInt,CSize)
-import GHC.Exts (RealWorld)
+import Foreign.C.Types (CSize)
 import Net.Types (IPv4(..))
 import Socket.IPv4 (Peer(..))
 import Socket.AddrLength (advance,length)
@@ -37,9 +36,6 @@ endpointToSocketAddressInternet (Peer {address, port}) =
     { S.port = S.hostToNetworkShort port
     , S.address = S.hostToNetworkLong (getIPv4 address)
     }
-
-intToCInt :: Int -> CInt
-intToCInt = fromIntegral
 
 intToCSize :: Int -> CSize
 intToCSize = fromIntegral

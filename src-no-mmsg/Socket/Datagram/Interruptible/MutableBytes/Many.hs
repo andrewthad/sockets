@@ -35,7 +35,7 @@ receiveMany ::
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket c a
      -- ^ Socket
-  -> Socket.Discard.PeerlessSlab
+  -> Socket.Discard.PeerlessSlab p
      -- ^ Buffers into which sizes and payloads are received
   -> IO (Either (ReceiveException 'Interruptible) Int)
 receiveMany intr (Socket fd) (Socket.Discard.PeerlessSlab{sizes,payloads}) =
@@ -49,7 +49,7 @@ receiveManyFromIPv4 ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.IPv4Slab
+  -> Socket.IPv4.IPv4Slab p
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received
   -> IO (Either (ReceiveException 'Interruptible) Int)

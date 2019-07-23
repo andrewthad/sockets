@@ -1,5 +1,11 @@
 # Revision history for stream-sockets
 
+## 0.6.0.0
+
+* Give slab types a phantom type argument that indicates whether
+  or not they operate on pinned byte arrays. This makes it possible
+  to provide a `bytestring` interface to `recvmmsg`.
+
 ## 0.5.0.0
 
 * Add support for getting back `ECONNREFUSED` when send or receiving

@@ -180,8 +180,9 @@ testDatagramUndestinedB = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newPeerlessSlab 2 (max sz1 sz2)
-    msgs <- unhandled $ DUB.receiveMany sock slab
+    slab <- DUB.newPeerlessSlab 2
+    let sz = max sz1 sz2
+    msgs <- unhandled $ DUB.receiveMany sock slab sz
     let msgCount = PM.sizeofUnliftedArray msgs
     if msgCount == 2
       then pure (PM.indexUnliftedArray msgs 0, PM.indexUnliftedArray msgs 1)
@@ -222,13 +223,14 @@ testDatagramUndestinedC = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newIPv4Slab 3 (max sz1 (max sz2 (max sz3 sz4)))
-    msgsX <- unhandled $ DUB.receiveManyFromIPv4 sock slab
+    let sz = max sz1 (max sz2 (max sz3 sz4))
+    slab <- DUB.newIPv4Slab 3
+    msgsX <- unhandled $ DUB.receiveManyFromIPv4 sock slab sz
     let msgCountX = PM.sizeofSmallArray msgsX
     (msg1,msg2,msg3) <- if PM.sizeofSmallArray msgsX == 3
       then pure (PM.indexSmallArray msgsX 0, PM.indexSmallArray msgsX 1, PM.indexSmallArray msgsX 2)
       else fail $ "received a number of messages other than 3: " ++ show msgCountX
-    msgsY <- unhandled $ DUB.receiveManyFromIPv4 sock slab
+    msgsY <- unhandled $ DUB.receiveManyFromIPv4 sock slab sz
     let msgCountY = PM.sizeofSmallArray msgsY
     msg4 <- if msgCountY == 1
       then pure (PM.indexSmallArray msgsY 0)
@@ -287,12 +289,13 @@ testDatagramUndestinedE = do
   receiver m n = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
     PM.takeMVar n
-    slab <- DUB.newPeerlessSlab 1 (max sz1 (max sz2 sz3))
-    msgsX <- unhandled $ DUB.receiveMany sock slab
+    slab <- DUB.newPeerlessSlab 1
+    let sz = max sz1 (max sz2 sz3)
+    msgsX <- unhandled $ DUB.receiveMany sock slab sz
     when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for X"
-    msgsY <- unhandled $ DUB.receiveMany sock slab
+    msgsY <- unhandled $ DUB.receiveMany sock slab sz
     when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for Y"
-    msgsZ <- unhandled $ DUB.receiveMany sock slab
+    msgsZ <- unhandled $ DUB.receiveMany sock slab sz
     when (PM.sizeofUnliftedArray msgsX /= 1) $ fail "more than one message for Z"
     pure (PM.indexUnliftedArray msgsX 0,PM.indexUnliftedArray msgsY 0,PM.indexUnliftedArray msgsZ 0)
 
@@ -310,8 +313,8 @@ testDatagramUndestinedF = do
     unhandled $ DUB.sendToIPv4 sock (DIU.Peer IPv4.loopback dstPort) (unsliced message)
   receiver m = unhandled $ DIU.withSocket (DIU.Peer IPv4.loopback 0) $ \sock port -> do
     PM.putMVar m port
-    slab <- DUB.newPeerlessSlab 1 (sz - 1)
-    DUB.receiveMany sock slab
+    slab <- DUB.newPeerlessSlab 1
+    DUB.receiveMany sock slab (sz - 1)
 
 testDatagramUndestinedG :: Assertion
 testDatagramUndestinedG = do

@@ -33,7 +33,7 @@ import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.IPv4 
 receiveMany :: 
      Socket c a
      -- ^ Socket
-  -> Socket.Discard.PeerlessSlab
+  -> Socket.Discard.PeerlessSlab p
      -- ^ Buffers into which sizes and payloads are received
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
 receiveMany (Socket fd) (Socket.Discard.PeerlessSlab{sizes,payloads}) =
@@ -44,7 +44,7 @@ receiveMany (Socket fd) (Socket.Discard.PeerlessSlab{sizes,payloads}) =
 -- to the structure-of-arrays.
 receiveManyFromIPv4 :: 
      Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.IPv4Slab
+  -> Socket.IPv4.IPv4Slab p
      -- ^ Buffers into which sizes, addresses, and payloads
      -- are received
   -> IO (Either (ReceiveException 'Uninterruptible) Int)

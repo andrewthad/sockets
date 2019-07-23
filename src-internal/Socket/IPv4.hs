@@ -18,6 +18,8 @@ module Socket.IPv4
   , describeEndpoint
   , freezeIPv4Slab
   , newIPv4Slab
+  , replenishIPv4Slab
+  , replenishPinnedIPv4Slab
   ) where
 
 import Control.Exception (Exception)
@@ -31,7 +33,9 @@ import Data.Word (Word16)
 import Foreign.C.Types (CInt)
 import GHC.Exts (RealWorld,Int(I#))
 import Net.Types (IPv4(..))
+import Socket (Pinnedness(Pinned,Unpinned))
 import Socket.Error (die)
+import Socket.Slab (replenishPinned,replenishUnpinned)
 
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.Unlifted.Array as PM
@@ -57,32 +61,32 @@ data Message = Message
 -- | A slab of memory for bulk datagram ingest (via @recvmmsg@). This
 -- approach cuts down on allocations. Slabs are not safe for concurrent
 -- access. Do not share a slab across multiple threads.
-data IPv4Slab = IPv4Slab
-  { sizes :: !(MutablePrimArray RealWorld CInt)
-    -- ^ Buffer for returned datagram lengths
-  , peers :: !(MutablePrimArray RealWorld S.SocketAddressInternet)
-    -- ^ Buffer for returned addresses
-  , payloads :: !(MutableUnliftedArray RealWorld (MutableByteArray RealWorld))
-    -- ^ Buffers for datagram payloads, no slicing
-  }
+data IPv4Slab :: Pinnedness -> Type where
+  IPv4Slab ::
+    -- Invariant: payload sizes are nondecreasing. An
+    -- implication is that zero-size payloads come first.
+    -- Invariant: All non-zero-size payloads match the
+    -- phantom pinnedness. All zero-size payloads are
+    -- unpinned.
+    { sizes :: !(MutablePrimArray RealWorld CInt)
+      -- ^ Buffer for returned datagram lengths
+    , peers :: !(MutablePrimArray RealWorld S.SocketAddressInternet)
+      -- ^ Buffer for returned addresses
+    , payloads :: !(MutableUnliftedArray RealWorld (MutableByteArray RealWorld))
+      -- ^ Buffers for datagram payloads, no slicing
+    } -> IPv4Slab p
 
 -- | Allocate a slab that is used to receive multiple datagrams at
 -- the same time, additionally storing the IPv4 addresses of the peers.
 newIPv4Slab ::
      Int -- ^ maximum datagrams
-  -> Int -- ^ maximum size of individual datagram 
-  -> IO IPv4Slab
-newIPv4Slab !n !m = if n >= 1 && m >= 1
+  -> IO (IPv4Slab p)
+newIPv4Slab !n = if n >= 1
   then do
     sizes <- PM.newPrimArray n
     peers <- PM.newPrimArray n
-    payloads <- PM.unsafeNewUnliftedArray n
-    let go !ix = if ix > (-1)
-          then do
-            writeMutableByteArrayArray payloads ix =<< PM.newByteArray m
-            go (ix - 1)
-          else pure ()
-    go (n - 1)
+    tombstone <- PM.newByteArray 0
+    payloads <- PM.newUnliftedArray n tombstone
     pure IPv4Slab{sizes,peers,payloads}
   else die "newSlabIPv4"
 
@@ -130,29 +134,53 @@ deriving anyclass instance Exception SocketException
 -- messages with tombstones so that new buffers can be allocated
 -- before the next reception. End users should not need this function.
 freezeIPv4Slab ::
-     IPv4Slab -- ^ The slab
+     IPv4Slab p -- ^ The slab
   -> Int -- ^ Number of messages in the slab.
   -> IO (SmallArray Message)
 freezeIPv4Slab slab n = do
   msgs <- PM.newSmallArray n errorThunk
-  freezeSlabGo slab msgs (n - 1)
+  tombstone <- PM.newByteArray 0
+  freezeSlabGo slab tombstone msgs (n - 1)
 
-freezeSlabGo :: IPv4Slab -> SmallMutableArray RealWorld Message -> Int -> IO (SmallArray Message)
-freezeSlabGo slab@IPv4Slab{payloads,peers,sizes} !arr !ix = if ix > (-1)
+freezeSlabGo ::
+     IPv4Slab p
+  -> MutableByteArray RealWorld -- tombstone
+  -> SmallMutableArray RealWorld Message
+  -> Int
+  -> IO (SmallArray Message)
+freezeSlabGo slab@IPv4Slab{payloads,peers,sizes} !tombstone !arr !ix = if ix > (-1)
   then do
     !size <- PM.readPrimArray sizes ix
     !sockaddr <- PM.readPrimArray peers ix
     -- Remove the byte array from the array of payloads, freeze it, and
-    -- replace it with a freshly allocated byte array. 
+    -- replace it with a tombstone.
     payloadMut <- readMutableByteArrayArray payloads ix
-    originalSize <- PM.getSizeofMutableByteArray payloadMut
-    !payload <- PM.unsafeFreezeByteArray =<< PM.resizeMutableByteArray payloadMut (cintToInt size)
-    writeMutableByteArrayArray payloads ix =<< PM.newByteArray originalSize
+    !payload <- PM.unsafeFreezeByteArray
+      =<< PM.resizeMutableByteArray payloadMut (cintToInt size)
+    writeMutableByteArrayArray payloads ix tombstone
     let !peer = sockAddrToPeer sockaddr
         !msg = Message {peer,payload}
     PM.writeSmallArray arr ix msg
-    freezeSlabGo slab arr (ix - 1)
+    freezeSlabGo slab tombstone arr (ix - 1)
   else PM.unsafeFreezeSmallArray arr
+
+-- | Ensure that every buffer can accomodate at least the
+-- minimum number of bytes.
+replenishIPv4Slab ::
+     IPv4Slab 'Unpinned
+  -> Int -- ^ Minimum Size
+  -> IO () 
+replenishIPv4Slab IPv4Slab{payloads} minSz = do
+  let sz = PM.sizeofMutableUnliftedArray payloads
+  replenishUnpinned payloads minSz 0 sz
+
+replenishPinnedIPv4Slab ::
+     IPv4Slab 'Pinned
+  -> Int -- ^ Minimum Size
+  -> IO () 
+replenishPinnedIPv4Slab IPv4Slab{payloads} minSz = do
+  let sz = PM.sizeofMutableUnliftedArray payloads
+  replenishPinned payloads minSz 0 sz
 
 {-# NOINLINE errorThunk #-}
 errorThunk :: Message

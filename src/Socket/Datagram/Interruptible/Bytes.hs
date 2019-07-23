@@ -73,7 +73,7 @@ receiveManyFromIPv4 ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.IPv4Slab -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab p -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (SmallArray Message))
 receiveManyFromIPv4 intr sock slab = do
   MM.receiveManyFromIPv4 intr sock slab >>= \case
@@ -87,7 +87,7 @@ receiveMany ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.Discard.PeerlessSlab -- ^ Buffers for reception
+  -> Socket.Discard.PeerlessSlab p -- ^ Buffers for reception
   -> IO (Either (ReceiveException 'Interruptible) (UnliftedArray ByteArray))
 receiveMany intr sock slab = do
   MM.receiveMany intr sock slab >>= \case

@@ -68,7 +68,9 @@ flag debug
 
 flag checked
   manual: True
-  description: Add bounds-checking to primitive array operations
+  description:
+    Add bounds-checking to primitive array operations and to
+    certain operations that expect pinned byte arrays.
   default: False
 
 flag example
@@ -102,6 +104,7 @@ library sockets-internal
     Socket.EventManager
     Socket.IPv4
     Socket.Stream
+    Socket.Slab
     Socket.Bytes
     Socket.Destined.IPv4.UnmanagedBytes
     Socket.Destined.IPv4.MutableBytes

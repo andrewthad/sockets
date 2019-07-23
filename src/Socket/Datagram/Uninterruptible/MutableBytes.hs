@@ -77,4 +77,3 @@ receiveFromIPv4 ::
   -> IO (Either (ReceiveException 'Uninterruptible) Int)
 receiveFromIPv4 (Socket !sock) !buf !addr =
   V4R.receive proxy# sock buf addr
-

@@ -16,7 +16,9 @@ module Socket.Datagram.Uninterruptible.Bytes
   , receiveFromIPv4
     -- * Receive Many
   , receiveMany
+  , receiveManyPinned
   , receiveManyFromIPv4
+  , receiveManyPinnedFromIPv4
     -- * Types
   , Message(..)
   , Peer(..)
@@ -36,10 +38,11 @@ import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
 import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
+import Socket (Pinnedness(Pinned,Unpinned))
 import Socket.Address (posixToIPv4Peer)
 import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
 import Socket.IPv4 (Peer(..),Message(..),IPv4Slab(..),freezeIPv4Slab)
-import Socket.IPv4 (newIPv4Slab)
+import Socket.IPv4 (newIPv4Slab,replenishIPv4Slab,replenishPinnedIPv4Slab)
 import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 
 import qualified Data.Primitive as PM
@@ -97,22 +100,65 @@ receiveFromIPv4 (Socket !sock) !maxSz = do
       pure (Right (Message (posixToIPv4Peer posixAddr) r))
     Left err -> pure (Left err)
 
+-- | Receive multiple datagrams at the same time, returning the peers'
+-- addresses as well. This uses @recvmmsg@ on platforms that support it.
 receiveManyFromIPv4 ::
      Socket 'Unconnected ('Internet 'V4) -- ^ Socket
-  -> Socket.IPv4.IPv4Slab -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab 'Unpinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
   -> IO (Either (ReceiveException 'Uninterruptible) (SmallArray Message))
-receiveManyFromIPv4 sock slab = do
+receiveManyFromIPv4 sock slab maxSz = do
+  replenishIPv4Slab slab maxSz
   MM.receiveManyFromIPv4 sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
       arr <- Socket.IPv4.freezeIPv4Slab slab n
       pure (Right arr)
 
-receiveMany ::
+-- | Receive multiple datagrams at the same time, returning the peers'
+-- addresses as well. This uses @recvmmsg@ on platforms that support it.
+-- The byte arrays in the resulting 'Message's are pinned.
+receiveManyPinnedFromIPv4 ::
      Socket 'Unconnected ('Internet 'V4) -- ^ Socket
-  -> Socket.Discard.PeerlessSlab -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab 'Pinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
+  -> IO (Either (ReceiveException 'Uninterruptible) (SmallArray Message))
+receiveManyPinnedFromIPv4 sock slab maxSz = do
+  replenishPinnedIPv4Slab slab maxSz
+  MM.receiveManyFromIPv4 sock slab >>= \case
+    Left err -> pure (Left err)
+    Right n -> do
+      arr <- Socket.IPv4.freezeIPv4Slab slab n
+      pure (Right arr)
+
+-- | Receive multiple datagrams at the same time. This uses @recvmmsg@
+-- on platforms that support it.
+receiveMany ::
+     Socket c a -- ^ Socket
+  -> Socket.Discard.PeerlessSlab 'Unpinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
   -> IO (Either (ReceiveException 'Uninterruptible) (UnliftedArray ByteArray))
-receiveMany sock slab = do
+receiveMany sock slab maxSz = do
+  Socket.Discard.replenishPeerlessSlab slab maxSz
+  -- TODO: use maxSz in receiveMany. Not terribly
+  -- important for the time being.
+  MM.receiveMany sock slab >>= \case
+    Left err -> pure (Left err)
+    Right n -> do
+      arr <- Socket.Discard.freezePeerlessSlab slab n
+      pure (Right arr)
+
+-- | Receive multiple datagrams at the same time. This uses @recvmmsg@
+-- on platforms that support it. All resulting byte arrays are pinned.
+receiveManyPinned ::
+     Socket c a -- ^ Socket
+  -> Socket.Discard.PeerlessSlab 'Pinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
+  -> IO (Either (ReceiveException 'Uninterruptible) (UnliftedArray ByteArray))
+receiveManyPinned sock slab maxSz = do
+  Socket.Discard.replenishPinnedPeerlessSlab slab maxSz
+  -- TODO: use maxSz in receiveMany. Not terribly
+  -- important for the time being.
   MM.receiveMany sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do

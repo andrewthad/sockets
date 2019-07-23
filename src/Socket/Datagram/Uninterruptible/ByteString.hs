@@ -13,6 +13,8 @@ module Socket.Datagram.Uninterruptible.ByteString
     -- * Receive
   , receive
   , receiveFromIPv4
+    -- * Receive Many
+  , receiveMany
     -- * Slabs
     -- ** Types
   , PeerlessSlab(..)
@@ -26,21 +28,25 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Unsafe (unsafeUseAsCStringLen)
 import Data.Bytes.Types (UnmanagedBytes(UnmanagedBytes))
 import Data.Bytes.Types (MutableBytes(MutableBytes))
+import Data.Primitive (SmallArray)
 import Data.Primitive.Addr (Addr(..))
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset)
 import GHC.Exts (Ptr(Ptr),RealWorld,proxy#)
 import Posix.Socket (SocketAddressInternet)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
+import Socket (Pinnedness(Pinned))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
 import Socket.IPv4 (Peer,newIPv4Slab,IPv4Slab(..))
 import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 import Socket.Interop (fromPinned)
 
+import qualified Socket.Discard
 import qualified Data.Primitive as PM
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.Connected as CR
 import qualified Socket.Datagram.Uninterruptible.Addr.Send.Connected as CS
 import qualified Socket.Datagram.Uninterruptible.Addr.Send.IPv4 as V4S
 import qualified Socket.Datagram.Uninterruptible.MutableBytes.Receive.IPv4 as V4R
+import qualified Socket.Datagram.Uninterruptible.MutableBytes.Many as MM
 
 -- | Send a datagram using a socket with a pre-designated peer. This
 -- refers to a datagram socket for which POSIX @connect@ has locked
@@ -88,3 +94,26 @@ receiveFromIPv4 (Socket !sock) !len !addr = do
   V4R.receive proxy# sock (MutableBytes marr 0 len) addr >>= \case
     Left err -> pure (Left err)
     Right sz -> pure $! Right $! fromPinned marr 0 sz
+
+-- | Receive multiple datagrams at the same time. This uses @recvmmsg@
+-- on platforms that support it. This function is provided as a convenience
+-- for users of the @bytestring@ library. A slightly more allocation-friendly
+-- approach to receiving datagrams as bytestrings is to make use of
+-- 'Socket.Datagram.Uninterruptible.Bytes.receiveManyPinned' from
+-- @Socket.Datagram.Uninterruptible.Bytes@. Performing the conversion
+-- from pinned 'ByteArray' to 'ByteString' while folding over the result
+-- array may lead to fewer allocations depending on how the 'ByteString's
+-- are used.
+receiveMany ::
+     Socket c a -- ^ Socket
+  -> PeerlessSlab 'Pinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
+  -> IO (Either (ReceiveException 'Uninterruptible) (SmallArray ByteString))
+receiveMany sock slab maxSz = do
+  Socket.Discard.replenishPinnedPeerlessSlab slab maxSz
+  MM.receiveMany sock slab >>= \case
+    Left err -> pure (Left err)
+    Right n -> do
+      arr <- Socket.Discard.freezePeerlessSlabAsByteString slab n
+      pure (Right arr)
+

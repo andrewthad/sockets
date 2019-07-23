@@ -10,6 +10,7 @@ module Socket
   ( SocketUnrecoverableException(..)
   , Direction(..)
   , Connectedness(..)
+  , Pinnedness(..)
   , Family(..)
   , Version(..)
   , Interruptibility(..)
@@ -39,6 +40,18 @@ import qualified Data.List as L
 data Direction = Send | Receive
 
 data Connectedness = Connected | Unconnected
+
+-- | This is used as a phantom type to distinguish
+-- between pinned and unpinned memory. The distinction
+-- drawn here concerns the manner in which the user
+-- requested the byte array. Byte arrays resulting
+-- from newPinnedByteArray# are considered 'Pinned'
+-- while those resulting from newByteArray# are
+-- considered 'Unpinned'. Even if the runtime decides
+-- to pin a byte array requested by newByteArray#
+-- (e.g. because it is larger than 3KB), it is
+-- considered 'Unpinned' by this classification.
+data Pinnedness = Pinned | Unpinned
 
 data Family = Internet Version | Unix
 
