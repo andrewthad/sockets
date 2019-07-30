@@ -20,6 +20,7 @@ module Socket.Datagram.Uninterruptible.Bytes
   , receiveManyFromIPv4
   , receiveManyPinnedFromIPv4
     -- * Types
+  , Pinnedness(..)
   , Message(..)
   , Peer(..)
   , ReceiveException(..)

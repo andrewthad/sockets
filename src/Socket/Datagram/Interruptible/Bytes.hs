@@ -15,6 +15,7 @@ module Socket.Datagram.Interruptible.Bytes
   , receiveManyFromIPv4
   , receiveManyPinnedFromIPv4
     -- * Types
+  , Pinnedness(..)
   , Message(..)
   , Peer(..)
   , ReceiveException(..)
