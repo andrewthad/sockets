@@ -1,6 +1,6 @@
 cabal-version: 2.2
 name: sockets
-version: 0.5.0.0
+version: 0.6.0.0
 synopsis: High-level network sockets
 description:
   This library provides a high-level abstraction for network sockets. It uses
