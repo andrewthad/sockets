@@ -13,6 +13,18 @@ module Socket.Datagram.Interruptible.Bytes
     -- * Receive Many
   , receiveMany
   , receiveManyFromIPv4
+  , receiveManyPinnedFromIPv4
+    -- * Types
+  , Message(..)
+  , Peer(..)
+  , ReceiveException(..)
+    -- * Slabs
+    -- ** Types
+  , PeerlessSlab(..)
+  , IPv4Slab(..)
+    -- ** Functions
+  , newPeerlessSlab
+  , newIPv4Slab
   ) where
 
 import Control.Concurrent.STM (TVar)
@@ -20,13 +32,16 @@ import Data.Bytes.Types (MutableBytes(..))
 import Data.Primitive (ByteArray,SmallArray)
 import Data.Primitive.Unlifted.Array (UnliftedArray)
 import Data.Primitive.PrimArray.Offset (MutablePrimArrayOffset(..))
-import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Interruptible))
+import Socket (Connectedness(..),Family(..),Version(..))
+import Socket (Pinnedness(Pinned,Unpinned))
+import Socket (Interruptibility(Interruptible))
 import Socket.Address (posixToIPv4Peer)
-import Socket.Datagram (Socket(..),ReceiveException)
-import Socket.IPv4 (Message(..),IPv4Slab(..))
+import Socket.Datagram (Socket(..),ReceiveException(..))
+import Socket.IPv4 (Peer(..),Message(..),IPv4Slab(..),freezeIPv4Slab)
+import Socket.IPv4 (newIPv4Slab,replenishIPv4Slab,replenishPinnedIPv4Slab)
+import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 
 import qualified Data.Primitive as PM
-import qualified Socket.IPv4
 import qualified Socket.Discard
 import qualified Socket as SCK
 import qualified Socket.Datagram.Interruptible.MutableBytes.Many as MM
@@ -73,9 +88,27 @@ receiveManyFromIPv4 ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.IPv4.IPv4Slab p -- ^ Buffers for reception
+  -> Socket.IPv4.IPv4Slab 'Unpinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
   -> IO (Either (ReceiveException 'Interruptible) (SmallArray Message))
-receiveManyFromIPv4 intr sock slab = do
+receiveManyFromIPv4 intr sock slab maxSz = do
+  replenishIPv4Slab slab maxSz
+  MM.receiveManyFromIPv4 intr sock slab >>= \case
+    Left err -> pure (Left err)
+    Right n -> do
+      arr <- Socket.IPv4.freezeIPv4Slab slab n
+      pure (Right arr)
+
+receiveManyPinnedFromIPv4 ::
+     TVar Bool
+     -- ^ Interrupt. On 'True', give up and return
+     -- @'Left' 'ReceiveInterrupted'@.
+  -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
+  -> Socket.IPv4.IPv4Slab 'Pinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
+  -> IO (Either (ReceiveException 'Interruptible) (SmallArray Message))
+receiveManyPinnedFromIPv4 intr sock slab maxSz = do
+  replenishPinnedIPv4Slab slab maxSz
   MM.receiveManyFromIPv4 intr sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do
@@ -87,9 +120,11 @@ receiveMany ::
      -- ^ Interrupt. On 'True', give up and return
      -- @'Left' 'ReceiveInterrupted'@.
   -> Socket 'Unconnected ('SCK.Internet 'SCK.V4) -- ^ Socket
-  -> Socket.Discard.PeerlessSlab p -- ^ Buffers for reception
+  -> PeerlessSlab 'Unpinned -- ^ Buffers for reception
+  -> Int -- ^ Maximum size of single datagram
   -> IO (Either (ReceiveException 'Interruptible) (UnliftedArray ByteArray))
-receiveMany intr sock slab = do
+receiveMany intr sock slab maxSz = do
+  Socket.Discard.replenishPeerlessSlab slab maxSz
   MM.receiveMany intr sock slab >>= \case
     Left err -> pure (Left err)
     Right n -> do

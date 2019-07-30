@@ -5,6 +5,7 @@
 * Give slab types a phantom type argument that indicates whether
   or not they operate on pinned byte arrays. This makes it possible
   to provide a `bytestring` interface to `recvmmsg`.
+* Upgrade interruptible datagram interface to work with new slabs.
 
 ## 0.5.0.0
 

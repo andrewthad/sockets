@@ -13,6 +13,9 @@ module Socket.Datagram.Interruptible.ByteString
     -- * Receive
   , receive
   , receiveFromIPv4
+    -- * Types
+  , Peer(..)
+  , ReceiveException(..)
     -- * Slabs
     -- ** Types
   , PeerlessSlab(..)
@@ -33,7 +36,7 @@ import GHC.Exts (Ptr(Ptr),RealWorld)
 import Posix.Socket (SocketAddressInternet)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Interruptible))
 import Socket.Datagram (Socket(..),SendException,ReceiveException)
-import Socket.IPv4 (Peer,newIPv4Slab,IPv4Slab(..))
+import Socket.IPv4 (Peer(..),newIPv4Slab,IPv4Slab(..))
 import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
 import Socket.Interop (fromPinned)
 

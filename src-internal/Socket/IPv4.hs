@@ -52,7 +52,9 @@ data Peer = Peer
   , port :: !Word16
   } deriving stock (Eq,Show)
 
--- | A message received from a peer.
+-- | A message received from a peer. The payload may be pinned
+-- or unpinned depending on the reception function that produced
+-- the message.
 data Message = Message
   { peer :: {-# UNPACK #-} !Peer
   , payload :: !ByteArray
