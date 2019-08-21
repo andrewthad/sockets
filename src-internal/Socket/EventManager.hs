@@ -636,7 +636,7 @@ interruptibleWait !interrupt !tv = do
 interruptibleWaitCounting :: TVar Int -> TVar Bool -> TVar Token -> IO Token
 interruptibleWaitCounting !counter !interrupt !tv = atomically $
   -- We cannot go to the same lengths to avoid a transaction as
-  -- we do in interruptibleWait. Notablely, the token check and
+  -- we do in interruptibleWait. Notably, the token check and
   -- the counter increment must happen in a transaction together.
   ( do STM.check =<< STM.readTVar interrupt
        pure interruptToken

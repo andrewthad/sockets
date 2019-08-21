@@ -247,13 +247,16 @@ interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
   -- TODO: pull these out of the loop
   let !mngr = EM.manager
   tv <- EM.reader mngr fd
-  token <- EM.interruptibleWait abandon tv
+  token <- EM.interruptibleWaitCounting counter abandon tv
   if EM.isInterrupt token
     then pure (Left AcceptInterrupted)
     else waitlessAccept fd >>= \case
       Left merr -> case merr of
         Nothing -> do
           EM.unready token tv
+          -- Decrement the connection counter if the notification
+          -- from epoll was a false alarm.
+          atomically (modifyTVar' counter (subtract 1))
           interruptibleAcceptCounting counter abandon (Listener fd)
         Just err -> pure (Left err)
       Right r@(Connection conn,_) -> do
@@ -303,8 +306,6 @@ gracefulCloseA fd = do
       then gracefulCloseB tv token0 fd
       else do
         _ <- S.uninterruptibleClose fd
-        -- TODO: What about ENOTCONN? Can this happen if the remote
-        -- side has already closed the connection?
         throwIO $ SocketUnrecoverableException
           moduleSocketStreamIPv4
           SCK.functionGracefulClose
@@ -470,17 +471,14 @@ interruptibleForkAcceptedUnmasked ::
   -> Listener
      -- ^ Connection listener
   -> (Either CloseException () -> a -> IO ())
-     -- ^ Callback to handle an ungraceful close. 
+     -- ^ Callback to handle an ungraceful close. This must not
+     --   throw an exception.
   -> (Connection -> Peer -> IO a)
      -- ^ Callback to consume connection. Must not return the connection.
   -> IO (Either (AcceptException 'Interruptible) ThreadId)
 interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
   mask_ $ interruptibleAcceptCounting counter abandon lstn >>= \case
-    Left e -> do
-      case e of
-        AcceptInterrupted -> pure ()
-        _ -> atomically (modifyTVar' counter (subtract 1))
-      pure (Left e)
+    Left e -> pure (Left e)
     Right (conn, endpoint) -> fmap Right $ forkIOWithUnmask $ \unmask -> do
       a <- onException
         (unmask (cb conn endpoint))

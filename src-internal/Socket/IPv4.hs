@@ -116,7 +116,12 @@ data SocketException :: Type where
   --   <http://man7.org/linux/man-pages/man7/capabilities.7.html CAP_NET_BIND_SERVICE>
   --   capability instead of running the process as root. (@EACCES@)
   SocketPermissionDenied :: SocketException
-  -- | The given address is already in use. (@EADDRINUSE@ with specified port)
+  -- | The given address is already in use. This can also happen if the
+  --   address was recently bound to and closed. As mandated by
+  --   <https://tools.ietf.org/html/rfc793 RFC 793>, such a socket remains
+  --   in the @TIME-WAIT@ state for a while (commonly 30 to 120 seconds),
+  --   and no new socket may be bound to the address during this period.
+  --   (@EADDRINUSE@ with specified port)
   SocketAddressInUse :: SocketException
   -- | The port number was specified as zero, but upon attempting to
   --   bind to an ephemeral port, it was determined that all port numbers
