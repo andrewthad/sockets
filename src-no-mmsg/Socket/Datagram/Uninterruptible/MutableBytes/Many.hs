@@ -11,7 +11,6 @@ module Socket.Datagram.Uninterruptible.MutableBytes.Many
   ) where
 
 import GHC.Exts (proxy#)
-import GHC.IO (IO(..))
 import Socket (Interruptibility(Uninterruptible))
 import Socket (Connectedness(..))
 import Socket.Datagram (Socket(..),ReceiveException)
