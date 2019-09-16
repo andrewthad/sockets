@@ -292,6 +292,7 @@ library sockets-stream-bidirectional
       sockets-stream-send (Stream.Send.Indefinite)
     , sockets-stream-receive (Stream.Receive.Indefinite)
   default-language: Haskell2010
+  ghc-options: -O2 -Wall -j1
 
 library
   exposed-modules:
