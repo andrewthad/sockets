@@ -15,7 +15,7 @@ import Prelude hiding (length)
 import Data.Bytes.Types (UnmanagedBytes(UnmanagedBytes))
 import Socket.AddrLength (Buffer,length,advance)
 import Foreign.C.Error (Errno)
-import Foreign.C.Types (CInt,CSize)
+import Foreign.C.Types (CSize)
 import System.Posix.Types (Fd)
 import qualified Posix.Socket as S
 
