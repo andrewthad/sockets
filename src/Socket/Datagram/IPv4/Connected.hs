@@ -19,6 +19,8 @@ module Socket.Datagram.IPv4.Connected
   , Message(..)
     -- * Establish
   , withSocket
+  , open
+  , close
     -- * Exceptions
   , SocketException(..)
   , SD.ReceiveException(..)
@@ -46,15 +48,13 @@ import qualified Socket as SCK
 import qualified Socket.EventManager as EM
 import qualified Socket.Datagram as SD
 
-withSocket ::
+-- | Unbracketed function for opening a socket. Be careful with
+-- this function.
+open ::
      Peer
-     -- ^ Address and port to bind to
   -> Peer
-     -- ^ Peer address and port
-  -> (Socket 'Connected ('SCK.Internet 'SCK.V4) -> Word16 -> IO a)
-     -- ^ Callback providing the socket and the chosen port
-  -> IO (Either SocketException a)
-withSocket local@Peer{port = specifiedPort} !peer f = mask $ \restore -> do
+  -> IO (Either SocketException (Socket 'Connected ('SCK.Internet 'SCK.V4), Word16))
+open local@Peer{port = specifiedPort} !peer = do
   -- TODO: This is mostly copied from the unconnected withSocket.
   e1 <- S.uninterruptibleSocket S.internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.datagram)
@@ -100,11 +100,30 @@ withSocket local@Peer{port = specifiedPort} !peer f = mask $ \restore -> do
               S.uninterruptibleConnect fd sockAddr >>= \case
                 Left err -> 
                   die ("Socket.Datagram.IPv4.Connected.connect: " ++ describeErrorCode err)
-                Right (_ :: ()) -> do
-                  a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleErrorlessClose fd)
-                  S.uninterruptibleClose fd >>= \case
-                    Left err -> die ("Socket.Datagram.IPv4.Undestined.close: " ++ describeErrorCode err)
-                    Right _ -> pure (Right a)
+                Right (_ :: ()) -> pure (Right (Socket fd, actualPort))
+
+-- | Unbracketed function for closing a datagram socket. This is
+-- not needed when using 'withSocket'.
+close :: Socket c a -> IO ()
+close (Socket fd) = S.uninterruptibleClose fd >>= \case
+  Left err -> die ("Socket.Datagram.IPv4.Connected.close: " ++ describeErrorCode err)
+  Right _ -> pure ()
+
+withSocket ::
+     Peer
+     -- ^ Address and port to bind to
+  -> Peer
+     -- ^ Peer address and port
+  -> (Socket 'Connected ('SCK.Internet 'SCK.V4) -> Word16 -> IO a)
+     -- ^ Callback providing the socket and the chosen port
+  -> IO (Either SocketException a)
+withSocket !local !peer f = mask $ \restore -> open local peer >>= \case
+  Left err -> pure (Left err)
+  Right (Socket fd,actualPort) -> do
+    a <- onException (restore (f (Socket fd) actualPort)) (S.uninterruptibleErrorlessClose fd)
+    S.uninterruptibleClose fd >>= \case
+      Left err -> die ("Socket.Datagram.IPv4.Undestined.close: " ++ describeErrorCode err)
+      Right _ -> pure (Right a)
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
