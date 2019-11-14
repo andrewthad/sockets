@@ -33,13 +33,13 @@ import Control.Exception (mask,onException)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eACCES)
 import Foreign.C.Error (eNFILE,eMFILE,eADDRINUSE)
-import GHC.IO (IO(..))
 import Net.Types (IPv4(..))
 import Socket (Connectedness(..),Family(..))
 import Socket.Datagram (Socket(..))
 import Socket.Datagram (SocketException(..))
 import Socket.IPv4 (Peer(..),Message(..))
 import Socket.Error (die)
+import Socket.Datagram.Common (close)
 
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
@@ -49,7 +49,11 @@ import qualified Socket.EventManager as EM
 import qualified Socket.Datagram as SD
 
 -- | Unbracketed function for opening a socket. Be careful with
--- this function.
+-- this function. Only call this in contexts where exceptions are
+-- masked.
+--
+-- TODO: Rewrite this. Stop calling bind. Do not make the user
+-- supply a local address.
 open ::
      Peer
   -> Peer
@@ -101,13 +105,6 @@ open local@Peer{port = specifiedPort} !peer = do
                 Left err -> 
                   die ("Socket.Datagram.IPv4.Connected.connect: " ++ describeErrorCode err)
                 Right (_ :: ()) -> pure (Right (Socket fd, actualPort))
-
--- | Unbracketed function for closing a datagram socket. This is
--- not needed when using 'withSocket'.
-close :: Socket c a -> IO ()
-close (Socket fd) = S.uninterruptibleClose fd >>= \case
-  Left err -> die ("Socket.Datagram.IPv4.Connected.close: " ++ describeErrorCode err)
-  Right _ -> pure ()
 
 withSocket ::
      Peer

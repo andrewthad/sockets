@@ -78,7 +78,7 @@ data ConnectException :: Family -> Interruptibility -> Type where
   ConnectHostUnreachable :: ConnectException ('Internet v) i
   -- | All port numbers in the ephemeral port range are currently in
   --   use. (@EADDRNOTAVAIL@).
-  ConnectEphemeralPortsExhausted :: ConnectException d i
+  ConnectEphemeralPortsExhausted :: ConnectException ('Internet v) i
   -- | No one is listening on the remote address. (@ECONNREFUSED@)
   ConnectRefused :: ConnectException d i
   -- | Timeout while attempting connection. The server may be too busy
@@ -91,6 +91,9 @@ data ConnectException :: Family -> Interruptibility -> Type where
   ConnectTimeout :: ConnectException d i
   -- | Remote socket does not match the local socket type. (@EPROTOTYPE@)
   ConnectProtocolType :: ConnectException 'Unix i
+  -- | The pathname used as the remote address in a call to @connect@
+  --   did not exist. This only happens with UNIX-domain sockets. (@ENOENT@)
+  ConnectNoEntry :: ConnectException 'Unix i
   -- | STM-style interrupt (much safer than C-style interrupt)
   ConnectInterrupted :: ConnectException d 'Interruptible
 

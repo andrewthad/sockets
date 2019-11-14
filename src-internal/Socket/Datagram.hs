@@ -33,7 +33,12 @@ data SendException :: Interruptibility -> Type where
   --   peer is not listening on the requested port or that the
   --   datagram could not be routed to the peer. (This is a
   --   confusing way to notify the user of a send failure, but
-  --   it is how Linux does it.)
+  --   it is how Linux does it.) This does not happen reliably.
+  --   Certain network environment block the ICMP traffic needed
+  --   for the sender to learn that its messages have not been
+  --   delivered. This happens with UNIX-domain sockets nothing
+  --   is bound to the peer address. In that context, this exception
+  --   happens reliably. (@ECONNREFUSED@ or @ENOTCONN@)
   SendConnectionRefused :: SendException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   SendInterrupted :: SendException 'Interruptible

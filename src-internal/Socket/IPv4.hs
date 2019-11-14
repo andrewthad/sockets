@@ -44,7 +44,7 @@ import qualified GHC.Exts as Exts
 import qualified Net.IPv4 as IPv4
 import qualified Posix.Socket as S
 
--- | An peer for an IPv4 socket, connection, or listener.
+-- | A peer for an IPv4 socket, connection, or listener.
 --   Everything is in host byte order, and the user is not
 --   responsible for performing any conversions.
 data Peer = Peer

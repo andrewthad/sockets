@@ -299,6 +299,8 @@ library
     Socket.Address
     Socket.Datagram.IPv4.Unconnected
     Socket.Datagram.IPv4.Connected
+    Socket.Datagram.Unix.Unconnected
+    Socket.Datagram.Unix.Connected
     Socket.Stream.IPv4
     Socket.Datagram.Interruptible.Addr
     Socket.Datagram.Interruptible.Bytes
@@ -320,6 +322,7 @@ library
     Socket.Stream.Uninterruptible.MutableBytes
     Socket.Stream.Uninterruptible.Hybrid
   other-modules:
+    Socket.Datagram.Common
     Socket.Datagram.Interruptible.MutableBytes.Many
     Socket.Datagram.Uninterruptible.MutableBytes.Many
   mixins:
