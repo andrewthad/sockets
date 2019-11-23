@@ -12,8 +12,10 @@
 -- be zero and the length would be the length of the 'ByteArray'
 -- payload.
 module Socket.Stream.Uninterruptible.Bytes
-  ( send
+  ( -- * Send
+    send
   , sendMany
+    -- * Receive
   , receiveExactly
   , receiveOnce
   , receiveBetween

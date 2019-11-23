@@ -3,17 +3,23 @@
 {-# language MagicHash #-}
 
 module Socket.Stream.Uninterruptible.MutableBytes
-  ( send
+  ( -- * Send
+    send
+  , sendMany
+    -- * Receive
   , receiveExactly
   , receiveOnce
   , receiveBetween
   ) where
 
 import Data.Bytes.Types (MutableBytes)
+import Data.Primitive (MutableByteArray)
+import Data.Primitive.Unlifted.Array (UnliftedArray(..))
 import GHC.Exts (RealWorld,proxy#)
 import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Uninterruptible))
 
+import qualified Socket.Stream.Uninterruptible.Bytes as SSUB
 import qualified Socket.Stream.Uninterruptible.MutableBytes.Send as Send
 import qualified Socket.Stream.Uninterruptible.MutableBytes.Receive as Receive
 
@@ -25,6 +31,22 @@ send ::
   -> IO (Either (SendException 'Uninterruptible) ())
 {-# inline send #-}
 send = Send.send proxy#
+
+-- | Send many buffers with vectored I/O. This uses @sendmsg@ to send
+--   multiple chunks at a time. It may call @sendmsg@ more than once
+--   if there is not enough space in the operating system send buffer
+--   to house all the chunks at the same time.
+sendMany ::
+     Connection -- ^ Connection
+  -> UnliftedArray (MutableByteArray RealWorld) -- ^ Byte arrays
+  -> IO (Either (SendException 'Uninterruptible) ())
+{-# inline sendMany #-}
+sendMany conn (UnliftedArray bufs) =
+  -- Effectively, what we are doing here is unsafely coercing the
+  -- buffer from mutable to immutable. This ends up being sound
+  -- in this context because SSUB.sendMany does not preserve any
+  -- referenced to its argument byte arrays.
+  SSUB.sendMany conn (UnliftedArray bufs)
 
 -- | Receive a number of bytes exactly equal to the length of the
 --   buffer slice. If needed, this may call @recv@ repeatedly until
