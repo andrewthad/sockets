@@ -100,8 +100,6 @@ connect ::
      -- ^ Unix-domain datagram socket
   -> IO (Either (ConnectException 'Unix 'Uninterruptible) ())
 connect (UnixAddress remote) (Socket fd) = do
-  let !mngr = EM.manager
-  EM.register mngr fd
   let sockAddr = id
         $ S.encodeSocketAddressUnix
         $ S.SocketAddressUnix
