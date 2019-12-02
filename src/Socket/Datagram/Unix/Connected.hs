@@ -19,6 +19,7 @@ module Socket.Datagram.Unix.Connected
   , Message(..)
     -- * Establish
   , withSocket
+  , connect
   , open
   , close
     -- * Exceptions
@@ -80,7 +81,7 @@ open (UnixAddress remote) = do
 withSocket ::
      UnixAddress
      -- ^ Peer address (to connect to)
-  -> (Socket 'Connected ('SCK.Internet 'SCK.V4) -> IO a)
+  -> (Socket 'Connected 'SCK.Unix -> IO a)
      -- ^ Callback providing the socket and the chosen port
   -> IO (Either (ConnectException 'Unix 'Uninterruptible) a)
 withSocket !peer f = mask $ \restore -> open peer >>= \case
@@ -90,6 +91,24 @@ withSocket !peer f = mask $ \restore -> open peer >>= \case
     S.uninterruptibleClose fd >>= \case
       Left err -> die ("Socket.Datagram.Unix.Connected.close: " ++ describeErrorCode err)
       Right _ -> pure (Right a)
+
+-- | Set the endpoint to connect to.
+connect ::
+     UnixAddress
+     -- ^ Peer address
+  -> Socket 'Connected 'SCK.Unix
+     -- ^ Unix-domain datagram socket
+  -> IO (Either (ConnectException 'Unix 'Uninterruptible) ())
+connect (UnixAddress remote) (Socket fd) = do
+  let !mngr = EM.manager
+  EM.register mngr fd
+  let sockAddr = id
+        $ S.encodeSocketAddressUnix
+        $ S.SocketAddressUnix
+        $ remote
+  S.uninterruptibleConnect fd sockAddr >>= \case
+    Left err -> handleConnectException err
+    Right (_ :: ()) -> pure (Right ())
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
