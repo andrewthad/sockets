@@ -83,7 +83,7 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , bytestring >=0.10 && <0.11
     , ip >= 1.4.1
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2
     , primitive-addr >= 0.1 && <0.2
@@ -103,6 +103,7 @@ library sockets-internal
     Socket.Error
     Socket.EventManager
     Socket.IPv4
+    Socket.SequencedPacket
     Socket.Stream
     Socket.Slab
     Socket.Bytes
@@ -155,7 +156,7 @@ library sockets-datagram-send
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
@@ -173,7 +174,7 @@ library sockets-datagram-receive
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , primitive-offset >= 0.2 && <0.3
     , sockets-internal
     , sockets-buffer
@@ -194,7 +195,7 @@ library sockets-datagram-receive-many
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , primitive-unlifted >= 0.1 && <0.2
     , byteslice >= 0.1.1
     , sockets-datagram-receive
@@ -218,13 +219,14 @@ library sockets-stream-send
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
     , sockets-interrupt
   exposed-modules:
     Stream.Send.Indefinite
+    SequencedPacket.Send.Indefinite
   signatures:
     Stream.Send
   hs-source-dirs: src-stream-send
@@ -235,13 +237,14 @@ library sockets-stream-receive
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
     , sockets-interrupt
   exposed-modules:
     Stream.Receive.Indefinite
+    SequencedPacket.Receive.Indefinite
   signatures:
     Stream.Receive
   hs-source-dirs: src-stream-receive
@@ -252,7 +255,7 @@ library sockets-stream-send-two
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , stm >= 2.4
     , sockets-internal
     , sockets-interrupt
@@ -288,9 +291,10 @@ library sockets-stream-bidirectional
   reexported-modules:
     , Stream.Send.Indefinite
     , Stream.Receive.Indefinite
+    , SequencedPacket.Receive.Indefinite
   mixins:
       sockets-stream-send (Stream.Send.Indefinite)
-    , sockets-stream-receive (Stream.Receive.Indefinite)
+    , sockets-stream-receive (Stream.Receive.Indefinite,SequencedPacket.Receive.Indefinite)
   default-language: Haskell2010
   ghc-options: -O2 -Wall -j1
 
@@ -301,6 +305,8 @@ library
     Socket.Datagram.IPv4.Connected
     Socket.Datagram.Unix.Unconnected
     Socket.Datagram.Unix.Connected
+    Socket.SequencedPacket.Unix
+    Socket.SequencedPacket.Uninterruptible.Bytes
     Socket.Stream.IPv4
     Socket.Datagram.Interruptible.Addr
     Socket.Datagram.Interruptible.Bytes
@@ -322,6 +328,7 @@ library
     Socket.Stream.Uninterruptible.MutableBytes
     Socket.Stream.Uninterruptible.Hybrid
   other-modules:
+    Socket.Pair
     Socket.Datagram.Common
     Socket.Datagram.Interruptible.MutableBytes.Many
     Socket.Datagram.Uninterruptible.MutableBytes.Many
@@ -461,7 +468,9 @@ library
        Socket.Interrupt as Socket.Interruptible,
        Socket.Buffer as Socket.Bytes),
     sockets-stream-send
-      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Bytes.Send)
+      (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.Bytes.Send,
+       SequencedPacket.Send.Indefinite as Socket.SequencedPacket.Uninterruptible.Bytes.Send
+      )
       requires
       (Stream.Send as Socket.Bytes,
        Socket.Interrupt as Socket.Uninterruptible,
@@ -476,7 +485,8 @@ library
        Socket.Interrupt as Socket.Interruptible),
     sockets-stream-bidirectional
       (Stream.Send.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Send,
-       Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Receive)
+       Stream.Receive.Indefinite as Socket.Stream.Uninterruptible.MutableBytes.Receive,
+       SequencedPacket.Receive.Indefinite as Socket.SequencedPacket.Uninterruptible.MutableBytes.Receive)
       requires
       (Stream.Send as Socket.MutableBytes,
        Stream.Receive as Socket.MutableBytes,
@@ -520,7 +530,7 @@ library
     , bytestring >=0.10 && <0.11
     , error-codes >=0.1.0.1 && <0.2
     , ip >=1.4.1
-    , posix-api >=0.3.2 && <0.4
+    , posix-api >=0.3.3 && <0.4
     , primitive-addr >= 0.1 && <0.2
     , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2

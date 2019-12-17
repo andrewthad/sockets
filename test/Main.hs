@@ -29,12 +29,16 @@ import System.IO (stderr,hPutStrLn)
 import Test.Tasty
 import Test.Tasty.HUnit
 
+import qualified Data.Bytes as Bytes
 import qualified Data.ByteString as B
 import qualified Data.Primitive as PM
 import qualified Data.Primitive.Unlifted.Array as PM
 import qualified Data.Primitive.MVar as PM
 import qualified GHC.Exts as E
 import qualified Net.IPv4 as IPv4
+import qualified Socket.SequencedPacket.Unix as SP
+import qualified Socket.SequencedPacket.Uninterruptible.Bytes as SP
+import qualified Socket.Datagram.Unix.Connected as DUC
 import qualified Socket.Datagram.IPv4.Unconnected as DIU
 import qualified Socket.Datagram.IPv4.Connected as DIC
 import qualified Socket.Datagram.Uninterruptible.Bytes as DUB
@@ -65,6 +69,17 @@ tests = testGroup "socket"
         [ testCase "A" testDatagramConnectedA
         , testCase "B" testDatagramConnectedB
         ]
+      ]
+    , testGroup "unix"
+      [ testGroup "connected"
+        [ testCase "C" testDatagramConnectedC
+        ]
+      ]
+    ]
+  , testGroup "seqpacket"
+    [ testGroup "unix"
+      [ testCase "A" testSeqpacketA
+      , testCase "B" testSeqpacketB
       ]
     ]
   , testGroup "stream"
@@ -139,6 +154,52 @@ testDatagramConnectedB = do
       Left e -> throwIO e
       Right _ -> fail "testDatagramUndestinedB: received datagram"
     )
+
+-- This checks that unix-domain datagram socketpair works.
+testDatagramConnectedC :: Assertion
+testDatagramConnectedC = do
+  ((),actual) <- either throwIO pure =<< DUC.withPair
+    (\src dst -> concurrently
+      ( unhandled $ DUB.send src (unsliced message) )
+      ( unhandled $ DUB.receive dst sz )
+    )
+  message @=? actual
+  where
+  message = E.fromList [0,1,2,3] :: ByteArray
+  sz = PM.sizeofByteArray message
+
+-- This checks that unix-domain seqpacket socketpair works.
+testSeqpacketA :: Assertion
+testSeqpacketA = do
+  ((),actual) <- either throwIO pure =<< SP.withPair
+    (\src dst -> concurrently
+      ( unhandled $ SP.send src (unsliced message) )
+      ( unhandled $ SP.receive dst (sz + 1) )
+    )
+  message @=? actual
+  where
+  message = E.fromList [0,1,2,3] :: ByteArray
+  sz = PM.sizeofByteArray message
+
+testSeqpacketB :: Assertion
+testSeqpacketB = do
+  (m :: PM.MVar RealWorld ()) <- PM.newEmptyMVar
+  ((),received) <- concurrently (sender m) (receiver m)
+  received @=? message
+  where
+  -- Socket in abstract namespace
+  addr = DUC.UnixAddress (E.fromList [0,97,98,99,100,101])
+  message = E.fromList (enumFromTo 0 (100 :: Word8)) :: ByteArray
+  sender :: PM.MVar RealWorld () -> IO ()
+  sender m = do
+    PM.takeMVar m
+    unhandled $ SP.withConnection addr unhandledClose $ \conn -> do
+      unhandled $ SP.send conn (Bytes.fromByteArray message)
+  receiver :: PM.MVar RealWorld () -> IO ByteArray
+  receiver m = unhandled $ SP.withListener addr $ \listener -> do
+    PM.putMVar m ()
+    unhandled $ SP.withAccepted listener unhandledClose $ \conn -> do
+      unhandled $ SP.receive conn 256
 
 testDatagramUndestinedA :: Assertion
 testDatagramUndestinedA = do

@@ -1,0 +1,5 @@
+[Unit]
+Description=Bytemunch Socket
+
+[Socket]
+ListenStream=127.0.0.1:9999

@@ -7,6 +7,8 @@ module Socket.Uninterruptible
   , Interrupt
   , Intr
   , wait
+  , tokenToSequencedPacketSendException
+  , tokenToSequencedPacketReceiveException
   , tokenToStreamSendException
   , tokenToStreamReceiveException
   , tokenToDatagramSendException
@@ -21,12 +23,21 @@ import Socket.EventManager (Token)
 import qualified Socket.EventManager as EM
 import qualified Socket.Stream as Stream
 import qualified Socket.Datagram as Datagram
+import qualified Socket.SequencedPacket as SequencedPacket
 
 -- We use Proxy# instead of () to ensure that this interrupt type
 -- has no runtime cost associated with it.
 type InterruptRep = 'TupleRep '[]
 type Interrupt = Proxy# Void
 type Intr = 'Uninterruptible
+
+tokenToSequencedPacketSendException :: Token -> Either (SequencedPacket.SendException 'Uninterruptible) ()
+{-# inline tokenToSequencedPacketSendException #-}
+tokenToSequencedPacketSendException _ = Right ()
+
+tokenToSequencedPacketReceiveException :: Token -> Either (SequencedPacket.ReceiveException 'Uninterruptible) ()
+{-# inline tokenToSequencedPacketReceiveException #-}
+tokenToSequencedPacketReceiveException _ = Right ()
 
 tokenToStreamSendException ::
      Token

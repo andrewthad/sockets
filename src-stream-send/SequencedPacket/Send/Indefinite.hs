@@ -2,27 +2,26 @@
 {-# language LambdaCase #-}
 {-# language MultiWayIf #-}
 
-module Datagram.Send.Indefinite
+module SequencedPacket.Send.Indefinite
   ( send
   , attemptSend
   ) where
 
 import Control.Concurrent.STM (TVar)
-import Datagram.Send (Peer)
-import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eACCES)
-import Foreign.C.Error (eCONNREFUSED,eNOTCONN)
+import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK)
+import Foreign.C.Error (eCONNRESET,ePIPE)
 import Foreign.C.Types (CSize)
 import Socket.Error (die)
 import Socket.EventManager (Token)
-import Socket.Datagram (SendException(..))
+import Socket.SequencedPacket (SendException(..))
 import Socket.Buffer (Buffer)
-import Socket.Interrupt (Interrupt,Intr,wait,tokenToDatagramSendException)
+import Socket.Interrupt (Interrupt,Intr,wait,tokenToSequencedPacketSendException)
 import System.Posix.Types (Fd)
 
 import qualified Foreign.C.Error.Describe as D
 import qualified Socket.EventManager as EM
 import qualified Socket.Buffer as Buffer
-import qualified Datagram.Send as Send
+import qualified Stream.Send as Send
 
 -- Send the entirely of the buffer, making a single call to
 -- POSIX @send@. This is used for datagram sockets. We cannot use a
@@ -30,51 +29,47 @@ import qualified Datagram.Send as Send
 -- use different newtypes.
 send ::
      Interrupt
-  -> Peer
   -> Fd
   -> Buffer
   -> IO (Either (SendException Intr) ())
-send !intr !dst !sock !buf = do
+send !intr !sock !buf = do
   let !mngr = EM.manager
   tv <- EM.writer mngr sock
   token0 <- wait intr tv
-  case tokenToDatagramSendException token0 of
+  case tokenToSequencedPacketSendException token0 of
     Left err -> pure (Left err)
-    Right _ -> sendLoop intr dst sock tv token0 buf
+    Right _ -> sendLoop intr sock tv token0 buf
 
 -- Never blocks.
 attemptSend ::
-     Peer
-  -> Fd
+     Fd
   -> Buffer
   -> IO (Either (SendException Intr) Bool)
-attemptSend !dst !sock !buf = Send.send dst sock buf >>= \case
+attemptSend !sock !buf = Send.sendOnce sock buf >>= \case
   Left e ->
     if | e == eAGAIN || e == eWOULDBLOCK -> pure (Right False)
-       | e == eACCES -> pure (Left SendBroadcasted)
-       | e == eCONNREFUSED -> pure (Left SendConnectionRefused)
-       | e == eNOTCONN -> pure (Left SendConnectionRefused)
-       | otherwise -> die ("Socket.Datagram.send: " ++ describeErrorCode e)
+       | e == ePIPE -> pure (Left SendShutdown)
+       | e == eCONNRESET -> pure (Left SendReset)
+       | otherwise -> die ("Socket.SequencedPacket.send: " ++ describeErrorCode e)
   Right sz -> if csizeToInt sz == Buffer.length buf
     then pure $! Right True
     else pure $! Left $! SendTruncated $! csizeToInt sz
 
 sendLoop ::
-     Interrupt -> Peer -> Fd -> TVar Token -> Token
+     Interrupt -> Fd -> TVar Token -> Token
   -> Buffer -> IO (Either (SendException Intr) ())
-sendLoop !intr !dst !sock !tv !old !buf =
-  Send.send dst sock buf >>= \case
+sendLoop !intr !sock !tv !old !buf =
+  Send.sendOnce sock buf >>= \case
     Left e ->
       if | e == eAGAIN || e == eWOULDBLOCK -> do
              EM.unready old tv
              new <- wait intr tv
-             case tokenToDatagramSendException new of
+             case tokenToSequencedPacketSendException new of
                Left err -> pure (Left err)
-               Right _ -> sendLoop intr dst sock tv new buf
-         | e == eACCES -> pure (Left SendBroadcasted)
-         | e == eCONNREFUSED -> pure (Left SendConnectionRefused)
-         | e == eNOTCONN -> pure (Left SendConnectionRefused)
-         | otherwise -> die ("Socket.Datagram.send: " ++ describeErrorCode e)
+               Right _ -> sendLoop intr sock tv new buf
+         | e == ePIPE -> pure (Left SendShutdown)
+         | e == eCONNRESET -> pure (Left SendReset)
+         | otherwise -> die ("Socket.SequencedPacket.send: " ++ describeErrorCode e)
     Right sz -> if csizeToInt sz == Buffer.length buf
       then pure $! Right ()
       else pure $! Left $! SendTruncated $! csizeToInt sz
@@ -84,3 +79,4 @@ csizeToInt = fromIntegral
 
 describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
+

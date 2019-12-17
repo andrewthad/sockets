@@ -23,3 +23,5 @@ cabal.project.local~
 stack.yaml
 cabal.config
 *.swp
+examples/bytemunch/bytemunch
+examples/slowpoke

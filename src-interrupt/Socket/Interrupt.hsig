@@ -10,6 +10,7 @@ import Socket.EventManager (Token)
 import Socket (Interruptibility)
 import GHC.Exts (RuntimeRep,TYPE)
 import qualified Socket.Stream as Stream
+import qualified Socket.SequencedPacket as SequencedPacket
 import qualified Socket.Datagram as Datagram
 
 data InterruptRep :: RuntimeRep
@@ -18,6 +19,12 @@ data Intr :: Interruptibility
 
 wait :: Interrupt -> TVar Token -> IO Token
 
+tokenToSequencedPacketSendException ::
+     Token
+  -> Either (SequencedPacket.SendException Intr) ()
+tokenToSequencedPacketReceiveException ::
+     Token
+  -> Either (SequencedPacket.ReceiveException Intr) ()
 tokenToStreamSendException ::
      Token
   -> Int
