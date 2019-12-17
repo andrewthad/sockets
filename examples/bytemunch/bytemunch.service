@@ -1,0 +1,11 @@
+[Unit]
+Description=Bytemunch application
+After=network.target bytemunch.socket
+Requires=bytemunch.socket
+
+[Service]
+WorkingDirectory=/home/amartin
+ExecStart=/home/amartin/.local/bin/bytemunch
+NonBlocking=True
+ExecStop=/bin/kill -SIGINT $MAINPID
+KillMode=none

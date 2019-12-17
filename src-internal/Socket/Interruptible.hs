@@ -9,6 +9,8 @@ module Socket.Interruptible
   , tokenToStreamReceiveException
   , tokenToDatagramSendException
   , tokenToDatagramReceiveException
+  , tokenToSequencedPacketSendException
+  , tokenToSequencedPacketReceiveException
   ) where
 
 import Socket (Interruptibility(Interruptible))
@@ -18,10 +20,23 @@ import GHC.Exts (RuntimeRep(LiftedRep))
 import qualified Socket.EventManager as EM
 import qualified Socket.Stream as Stream
 import qualified Socket.Datagram as Datagram
+import qualified Socket.SequencedPacket as SequencedPacket
 
 type InterruptRep = 'LiftedRep
 type Interrupt = TVar Bool
 type Intr = 'Interruptible
+
+tokenToSequencedPacketSendException :: Token -> Either (SequencedPacket.SendException 'Interruptible) ()
+{-# inline tokenToSequencedPacketSendException #-}
+tokenToSequencedPacketSendException t = if EM.isInterrupt t
+  then Left SequencedPacket.SendInterrupted
+  else Right ()
+
+tokenToSequencedPacketReceiveException :: Token -> Either (SequencedPacket.ReceiveException 'Interruptible) ()
+{-# inline tokenToSequencedPacketReceiveException #-}
+tokenToSequencedPacketReceiveException t = if EM.isInterrupt t
+  then Left SequencedPacket.ReceiveInterrupted
+  else Right ()
 
 tokenToStreamSendException :: Token -> Int -> Either (Stream.SendException 'Interruptible) ()
 {-# inline tokenToStreamSendException #-}

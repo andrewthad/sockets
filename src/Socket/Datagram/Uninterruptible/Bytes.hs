@@ -11,9 +11,11 @@ module Socket.Datagram.Uninterruptible.Bytes
   ( -- * Send
     send
   , sendToIPv4
+  , trySend
     -- * Receive
   , receive
   , receiveFromIPv4
+  , tryReceive
     -- * Receive Many
   , receiveMany
   , receiveManyPinned
@@ -64,6 +66,15 @@ send ::
 send (Socket !sock) !buf =
   CS.send proxy# () sock buf
 
+-- | Variant of 'send' that never blocks. If the datagram cannot
+-- immidiately be copied to the send queue, returns @False@.
+trySend ::
+     Socket 'Connected a -- ^ Socket with designated peer
+  -> Bytes -- ^ Slice of a buffer
+  -> IO (Either (SendException 'Uninterruptible) Bool)
+trySend (Socket !sock) !buf =
+  CS.attemptSend () sock buf
+
 sendToIPv4 ::
      Socket 'Unconnected ('Internet 'V4) -- ^ IPv4 socket without designated peer
   -> Peer -- ^ Destination
@@ -85,6 +96,22 @@ receive (Socket !sock) !maxSz = do
     Right sz -> do
       r <- PM.resizeMutableByteArray buf sz >>= PM.unsafeFreezeByteArray
       pure (Right r)
+    Left err -> pure (Left err)
+
+-- | Variant of 'receive' that never blocks. If a datagram is not
+-- immidiately available on the receive queue, returns @Nothing@.
+tryReceive :: 
+     Socket c a -- ^ Socket
+  -> Int -- ^ Maximum datagram size
+  -> IO (Either (ReceiveException 'Uninterruptible) (Maybe ByteArray))
+tryReceive (Socket !sock) !maxSz = do
+  buf <- PM.newByteArray maxSz
+  CR.receiveAttempt sock (MutableBytes buf 0 maxSz) () >>= \case
+    Right msz -> case msz of
+      Nothing -> pure (Right Nothing)
+      Just sz -> do
+        r <- PM.resizeMutableByteArray buf sz >>= PM.unsafeFreezeByteArray
+        pure (Right (Just r))
     Left err -> pure (Left err)
 
 receiveFromIPv4 ::

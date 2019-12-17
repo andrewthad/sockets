@@ -485,7 +485,7 @@ fdToInt = fromIntegral
 --    something less that the full number of bytes requested, we want
 --    to unready the token. The next time we want to @recv@, we want to wait
 --    for the token to be ready before even attempting a @recv@.
--- 2. We want to be properly notification when the peer shuts down. Epoll
+-- 2. We want to be properly notified when the peer shuts down. Epoll
 --    reports this as EPOLLRDHUP.
 --
 -- The difficulty is that, without persistent readiness, performing

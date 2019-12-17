@@ -1,6 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
@@ -29,6 +31,7 @@ module Socket.Stream.IPv4
   , SocketException(..)
   , AcceptException(..)
   , CloseException(..)
+  , SystemdException(..)
     -- * Type Arguments
   , Interruptibility(..)
   , Family(..)
@@ -39,6 +42,7 @@ module Socket.Stream.IPv4
   , unlisten
   , unlisten_
   , connect
+  , systemdListener
   -- , interruptibleConnect
   , disconnect
   , disconnect_
@@ -48,7 +52,7 @@ module Socket.Stream.IPv4
 
 import Control.Concurrent (ThreadId)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
-import Control.Exception (mask, mask_, onException, throwIO)
+import Control.Exception (Exception, mask, mask_, onException, throwIO)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM (TVar,modifyTVar')
 import Data.Word (Word16)
@@ -67,12 +71,13 @@ import Socket.IPv4 (Peer(..),describeEndpoint)
 import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
 import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import Socket.Stream (Connection(..))
-import System.Posix.Types(Fd)
+import System.Posix.Types (Fd(Fd))
 
 import qualified Control.Concurrent.STM as STM
 import qualified Data.Primitive as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
+import qualified Linux.Systemd as L
 import qualified Posix.Socket as S
 import qualified Socket as SCK
 import qualified Socket.EventManager as EM
@@ -305,7 +310,7 @@ gracefulCloseA fd = do
     Left err -> if err == eNOTCONN
       then gracefulCloseB tv token0 fd
       else do
-        _ <- S.uninterruptibleClose fd
+        S.uninterruptibleErrorlessClose fd
         throwIO $ SocketUnrecoverableException
           moduleSocketStreamIPv4
           SCK.functionGracefulClose
@@ -318,8 +323,10 @@ gracefulCloseB :: TVar EM.Token -> EM.Token -> Fd -> IO (Either CloseException (
 gracefulCloseB !tv !token0 !fd = do
   !buf <- PM.newByteArray 1
   -- We do not actually want to remove the bytes from the
-  -- receive buffer, so we use MSG_PEEK. We are be certain
+  -- receive buffer, so we use MSG_PEEK. We are certain
   -- to send a reset when a CloseException is reported.
+  -- Retrospective: Why is MSG_PEEK important? Who cares if the
+  -- bytes get eaten? The receive buffer is about to get axed anyway.
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 S.peek >>= \case
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
       then do
@@ -757,8 +764,7 @@ handleBindListenException !thePort !e
       ("Socket.Stream.IPv4.bindListen: " ++ describeErrorCode e)
 
 -- These are the exceptions that can happen as a result
--- of calling @socket@ with the intent of using the socket
--- to open a connection (not listen for inbound connections).
+-- of calling @accept@.
 handleAcceptException :: Errno -> IO (Either (Maybe (AcceptException i)) a)
 handleAcceptException e
   | e == eAGAIN = pure (Left Nothing)
@@ -771,6 +777,40 @@ handleAcceptException e
 
 connectErrorOptionValueSize :: String
 connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
+
+-- | Retrieve a listener that systemd has passed to the process. This
+-- may only be called once. Do not call 'unlisten' or 'unlisten_' on this
+-- listener before exiting the application. There is no bracketed variant
+-- of this function because the listener is expected to remain open for
+-- the remainder of the application.
+--
+-- There are several reasons this function may return @Left@:
+--
+-- * @sd_listen_fds@ returned more than one file descriptor
+-- * @sd_is_socket@ found that the file descriptor was not a socket or
+--   that it was a socket that was not in listening mode.
+systemdListener :: IO (Either SystemdException Listener)
+systemdListener = L.listenFds 1 >>= \case
+  Left (Errno e) -> pure (Left (SystemdErrno e))
+  Right n -> case n of
+    1 -> L.isSocket fd0 S.internet S.stream 1 >>= \case
+      Left (Errno e) -> pure (Left (SystemdErrno e))
+      Right r -> case r of
+        0 -> pure (Left SystemdDescriptorInfo)
+        _ -> do
+          let !mngr = EM.manager
+          EM.register mngr fd0
+          pure (Right (Listener fd0))
+    _ -> pure (Left (SystemdDescriptorCount n))
+  where
+  fd0 = Fd 3
+
+data SystemdException
+  = SystemdDescriptorCount !CInt
+  | SystemdDescriptorInfo
+  | SystemdErrno !CInt
+  deriving stock (Show,Eq)
+  deriving anyclass (Exception)
 
 {- $bracketed
  
