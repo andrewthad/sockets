@@ -24,6 +24,8 @@ data SendException :: Interruptibility -> Type where
   --   number of bytes that were successfully copied into the
   --   send buffer. The datagram does still get sent when this
   --   happens.
+  --   TODO: Can this actually happen? SendMessageSize might be
+  --   what actually happens in this case.
   SendTruncated :: !Int -> SendException i
   -- | Attempted to send to a broadcast address.
   SendBroadcasted :: SendException i
