@@ -40,6 +40,9 @@ data SendException :: Interruptibility -> Type where
   --   is bound to the peer address. In that context, this exception
   --   happens reliably. (@ECONNREFUSED@ or @ENOTCONN@)
   SendConnectionRefused :: SendException i
+  -- | The size of the message made it impossible for the message
+  -- to be delivered atomically. (@EMSGSIZE@)
+  SendMessageSize :: SendException i
   -- | STM-style interrupt (much safer than C-style interrupt)
   SendInterrupted :: SendException 'Interruptible
 

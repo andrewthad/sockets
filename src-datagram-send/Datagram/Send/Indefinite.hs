@@ -9,7 +9,7 @@ module Datagram.Send.Indefinite
 
 import Control.Concurrent.STM (TVar)
 import Datagram.Send (Peer)
-import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eACCES)
+import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eACCES, eMSGSIZE)
 import Foreign.C.Error (eCONNREFUSED,eNOTCONN)
 import Foreign.C.Types (CSize)
 import Socket.Error (die)
@@ -54,6 +54,7 @@ attemptSend !dst !sock !buf = Send.send dst sock buf >>= \case
        | e == eACCES -> pure (Left SendBroadcasted)
        | e == eCONNREFUSED -> pure (Left SendConnectionRefused)
        | e == eNOTCONN -> pure (Left SendConnectionRefused)
+       | e == eMSGSIZE -> pure (Left SendMessageSize)
        | otherwise -> die ("Socket.Datagram.send: " ++ describeErrorCode e)
   Right sz -> if csizeToInt sz == Buffer.length buf
     then pure $! Right True
@@ -74,6 +75,7 @@ sendLoop !intr !dst !sock !tv !old !buf =
          | e == eACCES -> pure (Left SendBroadcasted)
          | e == eCONNREFUSED -> pure (Left SendConnectionRefused)
          | e == eNOTCONN -> pure (Left SendConnectionRefused)
+         | e == eMSGSIZE -> pure (Left SendMessageSize)
          | otherwise -> die ("Socket.Datagram.send: " ++ describeErrorCode e)
     Right sz -> if csizeToInt sz == Buffer.length buf
       then pure $! Right ()
