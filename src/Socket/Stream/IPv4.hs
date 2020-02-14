@@ -55,6 +55,7 @@ import Control.Concurrent (forkIO, forkIOWithUnmask)
 import Control.Exception (Exception, mask, mask_, onException, throwIO)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM (TVar,modifyTVar')
+import Data.Bits ((.&.))
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
 import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
@@ -78,6 +79,7 @@ import qualified Data.Primitive as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
 import qualified Linux.Systemd as L
+import qualified Posix.File as F
 import qualified Posix.Socket as S
 import qualified Socket as SCK
 import qualified Socket.EventManager as EM
@@ -797,10 +799,14 @@ systemdListener = L.listenFds 1 >>= \case
       Left (Errno e) -> pure (Left (SystemdErrno e))
       Right r -> case r of
         0 -> pure (Left SystemdDescriptorInfo)
-        _ -> do
-          let !mngr = EM.manager
-          EM.register mngr fd0
-          pure (Right (Listener fd0))
+        _ -> F.getFdFlags fd0 >>= \case
+          Left (Errno e) -> pure (Left (SystemdFnctlErrno e))
+          Right status -> if F.nonblocking .&. status == mempty
+            then pure (Left SystemdBlocking)
+            else do
+              let !mngr = EM.manager
+              EM.register mngr fd0
+              pure (Right (Listener fd0))
     _ -> pure (Left (SystemdDescriptorCount n))
   where
   fd0 = Fd 3
@@ -808,7 +814,11 @@ systemdListener = L.listenFds 1 >>= \case
 data SystemdException
   = SystemdDescriptorCount !CInt
   | SystemdDescriptorInfo
+  | SystemdBlocking
+    -- ^ The socket was in blocking mode. Set @NonBlocking=True@ in the systemd
+    -- service to resolve this.
   | SystemdErrno !CInt
+  | SystemdFnctlErrno !CInt
   deriving stock (Show,Eq)
   deriving anyclass (Exception)
 
