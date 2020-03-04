@@ -316,7 +316,7 @@ gracefulCloseA fd = do
           [SCK.cshutdown,describeErrorCode err]
     Right _ -> gracefulCloseB fd
 
--- In the commit after 9fa56d9f82ad085926ce2fb8a9e1395e03479668,
+-- In the commit after 30c0037b99517b4e665aec33ac3a479fc892cb98,
 -- gracefulCloseB was changed so that it does not wait for the peer to
 -- shut down its side of the connection. Although this behavior was useful,
 -- it made it possible for an unresponsive peer to hold open the connection.
@@ -802,7 +802,7 @@ systemdListener = L.listenFds 1 >>= \case
       Left (Errno e) -> pure (Left (SystemdErrno e))
       Right r -> case r of
         0 -> pure (Left SystemdDescriptorInfo)
-        _ -> F.getFdFlags fd0 >>= \case
+        _ -> F.uninterruptibleGetStatusFlags fd0 >>= \case
           Left (Errno e) -> pure (Left (SystemdFnctlErrno e))
           Right status -> if F.nonblocking .&. status == mempty
             then pure (Left SystemdBlocking)
