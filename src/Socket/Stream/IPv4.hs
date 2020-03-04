@@ -296,9 +296,6 @@ waitlessAccept lstn = do
 
 gracefulCloseA :: Fd -> IO (Either CloseException ())
 gracefulCloseA fd = do
-  let !mngr = EM.manager
-  !tv <- EM.reader mngr fd
-  token0 <- STM.readTVarIO tv
   S.uninterruptibleShutdown fd S.write >>= \case
     -- On Linux (not sure about others), calling shutdown
     -- on the write channel fails with with ENOTCONN if the
@@ -310,19 +307,27 @@ gracefulCloseA fd = do
     -- have since either way we become certain that the write channel
     -- is closed.
     Left err -> if err == eNOTCONN
-      then gracefulCloseB tv token0 fd
+      then gracefulCloseB fd
       else do
         S.uninterruptibleErrorlessClose fd
         throwIO $ SocketUnrecoverableException
           moduleSocketStreamIPv4
           SCK.functionGracefulClose
           [SCK.cshutdown,describeErrorCode err]
-    Right _ -> gracefulCloseB tv token0 fd
+    Right _ -> gracefulCloseB fd
 
--- The second part of the shutdown function must call itself recursively
--- since we may receive false read-ready notifications at any time.
-gracefulCloseB :: TVar EM.Token -> EM.Token -> Fd -> IO (Either CloseException ())
-gracefulCloseB !tv !token0 !fd = do
+-- In the commit after 9fa56d9f82ad085926ce2fb8a9e1395e03479668,
+-- gracefulCloseB was changed so that it does not wait for the peer to
+-- shut down its side of the connection. Although this behavior was useful,
+-- it made it possible for an unresponsive peer to hold open the connection.
+-- The new behavior is to make a single nonblocking attempt to read from
+-- the socket. If bytes are available, then we return a CloseException.
+-- Otherwise, we return Right. This is less deterministic than the
+-- previous approach (network latency affects the result), but the
+-- exceptions returned here are really only ever used for logging
+-- purposes anyway.
+gracefulCloseB :: Fd -> IO (Either CloseException ())
+gracefulCloseB !fd = do
   !buf <- PM.newByteArray 1
   -- We do not actually want to remove the bytes from the
   -- receive buffer, so we use MSG_PEEK. We are certain
@@ -331,9 +336,7 @@ gracefulCloseB !tv !token0 !fd = do
   -- bytes get eaten? The receive buffer is about to get axed anyway.
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 S.peek >>= \case
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
-      then do
-        token1 <- EM.persistentUnreadyAndWait token0 tv
-        gracefulCloseB tv token1 fd
+      then pure (Right ())
       else do
         _ <- S.uninterruptibleClose fd
         -- We treat all @recv@ errors except for the nonblocking
