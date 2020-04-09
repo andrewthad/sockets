@@ -1,0 +1,5 @@
+packages: .
+source-repository-package
+  type: git
+  location: https://github.com/andrewthad/posix-api
+  tag: 203e2eb5837f641e144c193e6432f9d256f98cd4
