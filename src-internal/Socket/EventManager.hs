@@ -31,6 +31,7 @@ module Socket.EventManager
 import Control.Applicative (liftA2,(<|>))
 import Control.Concurrent (getNumCapabilities,forkOn,rtsSupportsBoundThreads)
 import Control.Concurrent.STM (TVar)
+import Control.Exception (mask_)
 import Control.Monad (when)
 import Control.Monad.STM (atomically)
 import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
@@ -158,8 +159,10 @@ type MUArray = MutableUnliftedArray RealWorld
 data Manager = Manager
   { variables :: !(MUArray (MUArray (TVar Token)))
   , novars :: !(MUArray (TVar Token))
-    -- An empty mutable array. This array is used to mark the absense of
-    -- a tier-two array of TVars.
+    -- This array is used to mark the absense of a tier-two array
+    -- of TVars. It always has a single TVar in it. This TVar is
+    -- used for synchonization when growing the variables list.
+    -- Zero means unlocked. Anything else means locked.
   , epoll :: !Fd
   }
 
@@ -168,7 +171,8 @@ manager :: Manager
 manager = unsafePerformIO $ do
   when (not rtsSupportsBoundThreads) $ do
     fail $ "Socket.Event.manager: threaded runtime required"
-  !novars <- PM.unsafeNewUnliftedArray 0
+  !novars <- PM.unsafeNewUnliftedArray 1
+  writeTVarArray novars 0 =<< STM.newTVarIO (Token 0)
   !variables <- PM.unsafeNewUnliftedArray 32
   let goX !ix = if ix >= 0
         then do
@@ -254,11 +258,26 @@ constructivelyLookupTier1 !fd Manager{variables,novars} = do
               goVars (ix - 1)
             else pure ()
       goVars (len - 1)
+      syncVar <- readTVarArray novars 0
+      -- I do not feel great about the consistency guarantees concerning
+      -- how TVars interacte with non-TVar memory.
+      mask_ $ do
+        -- Acquire the lock. This plays nicely with the way GHC allows
+        -- retrying STM transactions to be interrupted in a mask.
+        STM.atomically $ do
+          Token n <- STM.readTVar syncVar
+          case n of
+            0 -> STM.writeTVar syncVar (Token 1)
+            _ -> STM.retry
+        varsTier2' <- readMutableUnliftedArrayArray variables ixTier1
+        when (PM.sameMutableUnliftedArray varsTier2' novars) $ do
+          writeMutableUnliftedArrayArray variables ixTier1 varsAttempt
+        STM.atomically (STM.writeTVar syncVar (Token 0))
       -- We ignore the success of casUnliftedArray. It does not actually
       -- matter whether or not it succeeded. If it failed, some other
       -- thread must have initialized the tier 2 arrays.
-      (success,tier2) <- casMutableUnliftedArrayArray variables ixTier1 novars varsAttempt
-      debug ("constructivelyLookupTier1: Created tier 2 array of length " ++ show len ++ " at index " ++ show ixTier1 ++ " with success " ++ show success)
+      tier2 <- readMutableUnliftedArrayArray variables ixTier1
+      debug ("constructivelyLookupTier1: Created tier 2 array of length " ++ show len ++ " at index " ++ show ixTier1)
       pure (ixTier2,tier2)
     else pure (ixTier2,varsTier2)
 
@@ -755,22 +774,3 @@ writeMutableUnliftedArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (MutableUn
 -- 
 -- These interpretations suggest that logical disjunction will give 
 -- us the current readiness of the channel.
-
-casMutableUnliftedArrayArray ::
-     MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ array
-  -> Int -- ^ index
-  -> (MutableUnliftedArray RealWorld a) -- ^ expected old value
-  -> (MutableUnliftedArray RealWorld a) -- ^ new value
-  -> IO (Bool,MutableUnliftedArray RealWorld a)
-{-# INLINE casMutableUnliftedArrayArray #-}
-casMutableUnliftedArrayArray (MutableUnliftedArray arr#) (I# i#) (MutableUnliftedArray old) (MutableUnliftedArray new) =
-  -- All of this unsafeCoercing is really nasty business. This will go away
-  -- once https://github.com/ghc-proposals/ghc-proposals/pull/203 happens.
-  -- Also, this is unsound if the result is immidiately consumed by
-  -- the FFI.
-  IO $ \s0 ->
-    let !uold = (unsafeCoerce# :: MutableArrayArray# RealWorld -> Any) old
-        !unew = (unsafeCoerce# :: MutableArrayArray# RealWorld -> Any) new
-     in case casArray# ((unsafeCoerce# :: MutableArrayArray# RealWorld -> MutableArray# RealWorld Any) arr#) i# uold unew s0 of
-          (# s1, n, ur #) -> (# s1, (isTrue# (n ==# 0# ),MutableUnliftedArray ((unsafeCoerce# :: Any -> MutableArrayArray# RealWorld) ur)) #)
-
