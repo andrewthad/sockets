@@ -70,7 +70,7 @@ open ::
 open (UnixAddress remote) = do
   -- TODO: This is somewhat copied from the internet-domain
   -- socket code
-  e1 <- S.uninterruptibleSocket S.unix
+  e1 <- S.uninterruptibleSocket S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.datagram)
     S.defaultProtocol
   case e1 of

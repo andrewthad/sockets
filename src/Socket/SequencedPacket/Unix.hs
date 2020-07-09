@@ -116,7 +116,7 @@ withListener endpoint f = mask $ \restore -> do
 -- resource-management library.
 listen :: UnixAddress -> IO (Either (BindException 'Unix) Listener)
 listen (UnixAddress remote) = do
-  e1 <- S.uninterruptibleSocket S.unix
+  e1 <- S.uninterruptibleSocket S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.sequencedPacket)
     S.defaultProtocol
   case e1 of
@@ -162,7 +162,7 @@ connect ::
      -- ^ Peer address
   -> IO (Either (ConnectException 'Unix 'Uninterruptible) Connection)
 connect (UnixAddress !remote) = do
-  e1 <- S.uninterruptibleSocket S.unix
+  e1 <- S.uninterruptibleSocket S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.sequencedPacket)
     S.defaultProtocol
   case e1 of
@@ -192,7 +192,7 @@ tryConnect ::
      -- ^ Peer address
   -> IO (Either (ConnectException 'Unix 'Uninterruptible) (Maybe Connection))
 tryConnect (UnixAddress !remote) = do
-  e1 <- S.uninterruptibleSocket S.unix
+  e1 <- S.uninterruptibleSocket S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.sequencedPacket)
     S.defaultProtocol
   case e1 of

@@ -48,7 +48,7 @@ open ::
      -- ^ Address and port to use
   -> IO (Either SocketException (Socket 'Unconnected ('SCK.Internet 'SCK.V4), Word16))
 open local@Peer{port = specifiedPort} = do
-  e1 <- S.uninterruptibleSocket S.internet
+  e1 <- S.uninterruptibleSocket S.Internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.datagram)
     S.defaultProtocol
   case e1 of

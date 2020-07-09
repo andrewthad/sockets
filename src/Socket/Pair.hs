@@ -20,7 +20,7 @@ import qualified Socket.EventManager as EM
 -- It could be used by Socket.Stream.Unix if that module is ever written.
 open :: S.Type -> IO (Either SocketException (Fd, Fd))
 open !typ = do
-  e1 <- S.uninterruptibleSocketPair S.unix
+  e1 <- S.uninterruptibleSocketPair S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) typ)
     S.defaultProtocol
   case e1 of

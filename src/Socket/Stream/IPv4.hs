@@ -10,10 +10,12 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Socket.Stream.IPv4
   ( -- * Types
-    Listener
+    Listener(..)
   , Connection(..)
   , Peer(..)
     -- * Bracketed
@@ -42,12 +44,16 @@ module Socket.Stream.IPv4
   , unlisten
   , unlisten_
   , connect
+  , interruptibleConnect
+  , connectOnDevice
+  , interruptibleConnectOnDevice
   , systemdListener
-  -- , interruptibleConnect
   , disconnect
   , disconnect_
   , accept
   , interruptibleAccept
+    -- * Shutdown
+  , shutdown
   ) where
 
 import Control.Concurrent (ThreadId)
@@ -103,13 +109,14 @@ newtype Listener = Listener Fd
 listen :: Peer -> IO (Either SocketException (Listener, Word16))
 listen endpoint@Peer{port = specifiedPort} = do
   debug ("listen: opening listen " ++ describeEndpoint endpoint)
-  e1 <- S.uninterruptibleSocket S.internet
+  e1 <- S.uninterruptibleSocket S.Internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
   debug ("listen: opened listen " ++ describeEndpoint endpoint)
   case e1 of
     Left err -> handleSocketListenException SCK.functionWithListener err
     Right fd -> do
+      -- TODO: shave off an allocation by building the sockaddr in C.
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
       debug ("listen: requested binding for listen " ++ describeEndpoint endpoint)
@@ -294,6 +301,18 @@ waitlessAccept lstn = do
           SCK.functionWithAccepted
           [SCK.cgetsockname,SCK.socketAddressSize]
 
+-- | Close the write channel. Any attempt to write to the connection after
+-- calling this will fail.
+shutdown :: Connection -> IO ()
+shutdown (Connection fd) = do
+  S.uninterruptibleShutdown fd S.write >>= \case
+    Left err -> if err == eNOTCONN
+      then pure ()
+      else do
+        S.uninterruptibleErrorlessClose fd
+        die ("Socket.Stream.shutdown: " ++ describeErrorCode err)
+    Right _ -> pure ()
+
 gracefulCloseA :: Fd -> IO (Either CloseException ())
 gracefulCloseA fd = do
   S.uninterruptibleShutdown fd S.write >>= \case
@@ -335,7 +354,7 @@ gracefulCloseB !fd = do
   -- Retrospective: Why is MSG_PEEK important? Who cares if the
   -- bytes get eaten? The receive buffer is about to get axed anyway.
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 S.peek >>= \case
-    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN
+    Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN || err1 == eNOTCONN
       then pure (Right ())
       else do
         _ <- S.uninterruptibleClose fd
@@ -500,6 +519,49 @@ interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
       atomically (modifyTVar' counter (subtract 1))
       pure r
 
+-- | Variant of 'connect' that allows specifying the name of the local
+-- interface that should be used for the connection. Uses @SO_BINDTODEVICE@.
+connectOnDevice ::
+     Peer -- ^ Remote endpoint
+  -> PM.ByteArray -- ^ Local network interface name
+  -> IO (Either (ConnectException ('Internet 'V4) 'Uninterruptible) Connection)
+connectOnDevice !remote !intf = do
+  beforeEstablishment remote >>= \case
+    Left err -> pure (Left err)
+    Right (fd,sockAddr) -> do
+      r <- S.uninterruptibleSetSocketOptionByteArray
+        fd S.levelSocket S.bindToDevice
+        intf (fromIntegral @Int @CInt (PM.sizeofByteArray intf))
+      -- We throw a bogus error here. TODO: fix this.
+      case r of
+        Left _ -> do
+          S.uninterruptibleErrorlessClose fd
+          pure (Left ConnectEphemeralPortsExhausted)
+        Right (_ :: ()) -> prepareConnection fd sockAddr
+
+-- | Variant of 'interruptibleConnect' that allows specifying the name of the local
+-- interface that should be used for the connection. Uses @SO_BINDTODEVICE@.
+interruptibleConnectOnDevice ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True', give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Peer -- ^ Remote endpoint
+  -> PM.ByteArray -- ^ Local network interface name
+  -> IO (Either (ConnectException ('Internet 'V4) 'Interruptible) Connection)
+interruptibleConnectOnDevice !abandon !remote !intf = do
+  beforeEstablishment remote >>= \case
+    Left err -> pure (Left err)
+    Right (fd,sockAddr) -> do
+      r <- S.uninterruptibleSetSocketOptionByteArray
+        fd S.levelSocket S.bindToDevice
+        intf (fromIntegral @Int @CInt (PM.sizeofByteArray intf))
+      -- We throw a bogus error here. TODO: fix this.
+      case r of
+        Left _ -> do
+          S.uninterruptibleErrorlessClose fd
+          pure (Left ConnectEphemeralPortsExhausted)
+        Right (_ :: ()) -> interruptiblePrepareConnection abandon fd sockAddr
+
 -- | Open a socket and connect to a peer. Requirements:
 --
 -- * This function may only be called in contexts where exceptions
@@ -520,60 +582,88 @@ connect ::
 connect !remote = do
   beforeEstablishment remote >>= \case
     Left err -> pure (Left err)
-    Right (fd,sockAddr) -> do
-      let !mngr = EM.manager
-      -- TODO: I believe it is sound to make both the write and
-      -- read channels start off as not ready. After all, the
-      -- socket is brand new and is not connected to a peer.
-      -- Consequently, there's no way we could miss events.
-      EM.register mngr fd
-      tv <- EM.writer mngr fd
-      debug ("connect: about to connect, fd=" ++ show fd)
-      token0 <- STM.readTVarIO tv
-      S.uninterruptibleConnect fd sockAddr >>= \case
-        Left err2 -> if err2 == eINPROGRESS
-          then do
-            debug ("connect: EINPROGRESS, fd=" ++ show fd)
-            -- When we receive EINPROGRESS, we have high confidence
-            -- the that the socket is not yet ready (keeping in mind
-            -- that it could have somehow become ready right after
-            -- C's connect returned). Immidiately diving into
-            -- afterEstablishment would result in a syscall to
-            -- getsockopt. But what a waste that would be since it
-            -- would almost certainly return EAGAIN. So, instead,
-            -- we unready the write channel (taking the usual
-            -- precautions) and then await readiness.
-            token1 <- EM.unreadyAndWait token0 tv
-            afterEstablishment tv token1 fd
-          else do
-            debug ("connect: failed, fd=" ++ show fd)
+    Right (fd,sockAddr) -> prepareConnection fd sockAddr
+
+prepareConnection ::
+     Fd
+  -> S.SocketAddress
+  -> IO (Either (ConnectException ('Internet 'V4) 'Uninterruptible) Connection)
+prepareConnection !fd !sockAddr = do
+  let !mngr = EM.manager
+  -- TODO: I believe it is sound to make both the write and
+  -- read channels start off as not ready. After all, the
+  -- socket is brand new and is not connected to a peer.
+  -- Consequently, there's no way we could miss events.
+  EM.register mngr fd
+  tv <- EM.writer mngr fd
+  debug ("connect: about to connect, fd=" ++ show fd)
+  token0 <- STM.readTVarIO tv
+  S.uninterruptibleConnect fd sockAddr >>= \case
+    Left err2 -> if err2 == eINPROGRESS
+      then do
+        debug ("connect: EINPROGRESS, fd=" ++ show fd)
+        -- When we receive EINPROGRESS, we have high confidence
+        -- the that the socket is not yet ready (keeping in mind
+        -- that it could have somehow become ready right after
+        -- C's connect returned). Immidiately diving into
+        -- afterEstablishment would result in a syscall to
+        -- getsockopt. But what a waste that would be since it
+        -- would almost certainly return EAGAIN. So, instead,
+        -- we unready the write channel (taking the usual
+        -- precautions) and then await readiness.
+        token1 <- EM.unreadyAndWait token0 tv
+        afterEstablishment tv token1 fd
+      else do
+        debug ("connect: failed, fd=" ++ show fd)
+        S.uninterruptibleErrorlessClose fd
+        handleConnectException SCK.functionWithConnection err2
+    Right _ -> do
+      debug ("connect: succeeded immidiately, fd=" ++ show fd)
+      afterEstablishment tv token0 fd
+
+-- See the notes in prepareConnection
+interruptiblePrepareConnection ::
+     TVar Bool
+  -> Fd
+  -> S.SocketAddress
+  -> IO (Either (ConnectException ('Internet 'V4) 'Interruptible) Connection)
+interruptiblePrepareConnection !abandon !fd !sockAddr = do
+  let !mngr = EM.manager
+  EM.register mngr fd
+  tv <- EM.writer mngr fd
+  debug ("connect: about to connect, fd=" ++ show fd)
+  token0 <- STM.readTVarIO tv
+  S.uninterruptibleConnect fd sockAddr >>= \case
+    Left err2 -> if err2 == eINPROGRESS
+      then do
+        debug ("connect: EINPROGRESS, fd=" ++ show fd)
+        EM.unready token0 tv
+        token1 <- EM.interruptibleWait abandon tv
+        case EM.isInterrupt token1 of
+          True -> do
             S.uninterruptibleErrorlessClose fd
-            handleConnectException SCK.functionWithConnection err2
-        Right _ -> do
-          debug ("connect: succeeded immidiately, fd=" ++ show fd)
-          afterEstablishment tv token0 fd
+            pure (Left ConnectInterrupted)
+          False -> interruptibleAfterEstablishment abandon tv token1 fd
+      else do
+        debug ("connect: failed, fd=" ++ show fd)
+        S.uninterruptibleErrorlessClose fd
+        handleConnectException SCK.functionWithConnection err2
+    Right _ -> do
+      debug ("connect: succeeded immidiately, fd=" ++ show fd)
+      interruptibleAfterEstablishment abandon tv token0 fd
 
 -- | Variant of 'connect' that is interruptible using STM-style interrupts.
--- interruptibleConnect ::
---      TVar Bool
---      -- ^ Interrupted. If this becomes 'True', give up and return
---      --   @'Left' 'AcceptInterrupted'@.
---   -> Peer
---      -- ^ Remote endpoint
---   -> IO (Either (ConnectException 'Interruptible) Connection)
--- interruptibleConnect !abandon !remote = do
---   beforeEstablishment remote >>= \case
---     Left err -> pure (Left err)
---     Right (fd,sockAddr) -> S.uninterruptibleConnect fd sockAddr >>= \case
---       Left err2 -> if err2 == eINPROGRESS
---         then do
---           interruptibleWaitWrite abandon fd >>= \case
---             True -> afterEstablishment fd
---             False -> pure (Left ConnectInterrupted)
---         else do
---           S.uninterruptibleErrorlessClose fd
---           handleConnectException SCK.functionWithConnection err2
---       Right _ -> afterEstablishment fd
+interruptibleConnect ::
+     TVar Bool
+     -- ^ Interrupted. If this becomes 'True', give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Peer
+     -- ^ Remote endpoint
+  -> IO (Either (ConnectException ('Internet 'V4) 'Interruptible) Connection)
+interruptibleConnect !abandon !remote = do
+  beforeEstablishment remote >>= \case
+    Left err -> pure (Left err)
+    Right (fd,sockAddr) -> interruptiblePrepareConnection abandon fd sockAddr
 
 -- Internal function called by both connect and interruptibleConnect
 -- before the connection is established. Creates the socket and prepares
@@ -582,7 +672,7 @@ beforeEstablishment :: Peer -> IO (Either (ConnectException ('Internet 'V4) i) (
 {-# INLINE beforeEstablishment #-}
 beforeEstablishment !remote = do
   debug ("beforeEstablishment: opening connection " ++ show remote)
-  e1 <- S.uninterruptibleSocket S.internet
+  e1 <- S.uninterruptibleSocket S.Internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
   debug ("beforeEstablishment: opened connection " ++ show remote)
@@ -624,6 +714,48 @@ afterEstablishment !tv !oldToken !fd = do
                EM.unready oldToken tv
                newToken <- EM.wait tv
                afterEstablishment tv newToken fd
+           | otherwise -> do
+               S.uninterruptibleErrorlessClose fd
+               handleConnectException SCK.functionWithConnection (Errno err)
+      else do
+        S.uninterruptibleErrorlessClose fd
+        throwIO $ SocketUnrecoverableException
+          moduleSocketStreamIPv4
+          functionWithListener
+          [SCK.cgetsockopt,connectErrorOptionValueSize]
+
+interruptibleAfterEstablishment ::
+     TVar Bool
+  -> TVar EM.Token -- token tvar 
+  -> EM.Token -- old token
+  -> Fd
+  -> IO (Either (ConnectException ('Internet 'V4) 'Interruptible) Connection)
+interruptibleAfterEstablishment !abandon !tv !oldToken !fd = do
+  debug ("interruptibleAfterEstablishment: finished waiting, fd=" ++ show fd)
+  e <- S.uninterruptibleGetSocketOption fd
+    S.levelSocket S.optionError (intToCInt (PM.sizeOf (undefined :: CInt)))
+  case e of
+    Left err -> do
+      S.uninterruptibleErrorlessClose fd
+      throwIO $ SocketUnrecoverableException
+        moduleSocketStreamIPv4
+        functionWithListener
+        [SCK.cgetsockopt,describeErrorCode err]
+    Right (sz,S.OptionValue val) -> if sz == intToCInt (PM.sizeOf (undefined :: CInt))
+      then
+        let err = PM.indexByteArray val 0 :: CInt in
+        if | err == 0 -> do
+               debug ("interruptibleAfterEstablishment: connection established, fd=" ++ show fd)
+               pure (Right (Connection fd))
+           | Errno err == eAGAIN || Errno err == eWOULDBLOCK -> do
+               debug ("interruptibleAfterEstablishment: not ready yet, unreadying token and waiting, fd=" ++ show fd)
+               EM.unready oldToken tv
+               newToken <- EM.interruptibleWait abandon tv
+               case EM.isInterrupt newToken of
+                 True -> do
+                   S.uninterruptibleErrorlessClose fd
+                   pure (Left ConnectInterrupted)
+                 False -> interruptibleAfterEstablishment abandon tv newToken fd
            | otherwise -> do
                S.uninterruptibleErrorlessClose fd
                handleConnectException SCK.functionWithConnection (Errno err)
@@ -798,7 +930,7 @@ systemdListener :: IO (Either SystemdException Listener)
 systemdListener = L.listenFds 1 >>= \case
   Left (Errno e) -> pure (Left (SystemdErrno e))
   Right n -> case n of
-    1 -> L.isSocket fd0 S.internet S.stream 1 >>= \case
+    1 -> L.isSocket fd0 S.Internet S.stream 1 >>= \case
       Left (Errno e) -> pure (Left (SystemdErrno e))
       Right r -> case r of
         0 -> pure (Left SystemdDescriptorInfo)

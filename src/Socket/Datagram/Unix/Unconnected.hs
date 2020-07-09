@@ -46,7 +46,7 @@ open ::
      -- ^ Address and port to use
   -> IO (Either SocketException (Socket 'Unconnected 'Unix))
 open (UnixAddress path) = do
-  e1 <- S.uninterruptibleSocket S.unix
+  e1 <- S.uninterruptibleSocket S.Unix
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.datagram)
     S.defaultProtocol
   case e1 of
