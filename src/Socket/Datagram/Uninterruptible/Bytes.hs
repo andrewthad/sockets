@@ -26,6 +26,7 @@ module Socket.Datagram.Uninterruptible.Bytes
   , Message(..)
   , Peer(..)
   , ReceiveException(..)
+  , SendException(..)
     -- * Slabs
     -- ** Types
   , PeerlessSlab(..)
@@ -43,7 +44,7 @@ import GHC.Exts (proxy#)
 import Socket (Connectedness(..),Family(..),Version(..),Interruptibility(Uninterruptible))
 import Socket (Pinnedness(Pinned,Unpinned))
 import Socket.Address (posixToIPv4Peer)
-import Socket.Datagram (Socket(..),SendException,ReceiveException(..))
+import Socket.Datagram (Socket(..),SendException(..),ReceiveException(..))
 import Socket.IPv4 (Peer(..),Message(..),IPv4Slab(..),freezeIPv4Slab)
 import Socket.IPv4 (newIPv4Slab,replenishIPv4Slab,replenishPinnedIPv4Slab)
 import Socket.Discard (PeerlessSlab(..),newPeerlessSlab)
