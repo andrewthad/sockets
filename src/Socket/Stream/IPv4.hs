@@ -190,7 +190,7 @@ withListener ::
      Peer
   -> (Listener -> Word16 -> IO a)
   -> IO (Either SocketException a)
-withListener endpoint f = mask $ \restore -> do
+withListener !endpoint f = mask $ \restore -> do
   listen endpoint >>= \case
     Left err -> pure (Left err)
     Right (sck, actualPort) -> do

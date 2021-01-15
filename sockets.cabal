@@ -308,6 +308,7 @@ library
     Socket.SequencedPacket.Unix
     Socket.SequencedPacket.Uninterruptible.Bytes
     Socket.Stream.IPv4
+    Socket.Stream.Unix
     Socket.Datagram.Interruptible.Addr
     Socket.Datagram.Interruptible.Bytes
     Socket.Datagram.Interruptible.ByteString
