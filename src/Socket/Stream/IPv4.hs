@@ -62,6 +62,7 @@ import Control.Exception (Exception, mask, mask_, onException, throwIO)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM (TVar,modifyTVar')
 import Data.Bits ((.&.))
+import Data.Coerce (coerce)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
 import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
@@ -78,6 +79,7 @@ import Socket.IPv4 (Peer(..),describeEndpoint)
 import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
 import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import Socket.Stream (Connection(..))
+import Socket.Systemd (SystemdException(..),systemdListenerInternal)
 import System.Posix.Types (Fd(Fd))
 
 import qualified Control.Concurrent.STM as STM
@@ -927,35 +929,7 @@ connectErrorOptionValueSize = "incorrectly sized value of SO_ERROR option"
 -- * @sd_is_socket@ found that the file descriptor was not a socket or
 --   that it was a socket that was not in listening mode.
 systemdListener :: IO (Either SystemdException Listener)
-systemdListener = L.listenFds 1 >>= \case
-  Left (Errno e) -> pure (Left (SystemdErrno e))
-  Right n -> case n of
-    1 -> L.isSocket fd0 S.Internet S.stream 1 >>= \case
-      Left (Errno e) -> pure (Left (SystemdErrno e))
-      Right r -> case r of
-        0 -> pure (Left SystemdDescriptorInfo)
-        _ -> F.uninterruptibleGetStatusFlags fd0 >>= \case
-          Left (Errno e) -> pure (Left (SystemdFnctlErrno e))
-          Right status -> if F.nonblocking .&. status == mempty
-            then pure (Left SystemdBlocking)
-            else do
-              let !mngr = EM.manager
-              EM.register mngr fd0
-              pure (Right (Listener fd0))
-    _ -> pure (Left (SystemdDescriptorCount n))
-  where
-  fd0 = Fd 3
-
-data SystemdException
-  = SystemdDescriptorCount !CInt
-  | SystemdDescriptorInfo
-  | SystemdBlocking
-    -- ^ The socket was in blocking mode. Set @NonBlocking=True@ in the systemd
-    -- service to resolve this.
-  | SystemdErrno !CInt
-  | SystemdFnctlErrno !CInt
-  deriving stock (Show,Eq)
-  deriving anyclass (Exception)
+systemdListener = coerce (systemdListenerInternal S.Internet)
 
 {- $bracketed
  

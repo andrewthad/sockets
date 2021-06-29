@@ -7,6 +7,7 @@ module Socket.Stream.Unix
   ( -- * Types
     Listener(..)
   , Connection(..)
+  , SystemdException(..)
     -- * Bracketed
   , withListener
   , withAccepted
@@ -18,9 +19,11 @@ module Socket.Stream.Unix
   , disconnect
   , disconnect_
   , accept
+  , systemdListener
   ) where
 
 import Control.Exception (Exception, mask, mask_, onException, throwIO)
+import Data.Coerce (coerce)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
 import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
@@ -32,6 +35,7 @@ import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import Socket.Stream (Connection(..))
 import System.Posix.Types (Fd(Fd))
 import Socket (Interruptibility(..))
+import Socket.Systemd (SystemdException(..),systemdListenerInternal)
 import qualified Control.Concurrent.STM as STM
 import qualified Foreign.C.Error.Describe as D
 import qualified Socket.EventManager as EM
@@ -275,3 +279,16 @@ withAccepted !lstn consumeException cb = do
   case r of
     Left e -> pure (Left e)
     Right (e,a) -> fmap Right (consumeException e a)
+
+-- | Retrieve a listener that systemd has passed to the process. This
+-- may only be called once. There is no bracketed variant
+-- of this function because the listener is expected to remain open for
+-- the remainder of the application.
+--
+-- There are several reasons this function may return @Left@:
+--
+-- * @sd_listen_fds@ returned more than one file descriptor
+-- * @sd_is_socket@ found that the file descriptor was not a socket or
+--   that it was a socket that was not in listening mode.
+systemdListener :: IO (Either SystemdException Listener)
+systemdListener = coerce (systemdListenerInternal S.Unix)

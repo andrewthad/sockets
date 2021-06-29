@@ -333,6 +333,7 @@ library
     Socket.Datagram.Common
     Socket.Datagram.Interruptible.MutableBytes.Many
     Socket.Datagram.Uninterruptible.MutableBytes.Many
+    Socket.Systemd
   mixins:
     sockets-datagram-receive-many
       (Datagram.Receive.Many.Indefinite as Socket.Datagram.Uninterruptible.MutableBytes.Receive.Many.Unit)
