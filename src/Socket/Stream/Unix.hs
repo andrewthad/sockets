@@ -7,6 +7,7 @@ module Socket.Stream.Unix
   ( -- * Types
     Listener(..)
   , Connection(..)
+  , UnixAddress(..)
   , SystemdException(..)
     -- * Bracketed
   , withListener
@@ -22,16 +23,15 @@ module Socket.Stream.Unix
   , systemdListener
   ) where
 
-import Control.Exception (Exception, mask, mask_, onException, throwIO)
+import Control.Exception (mask, onException)
 import Data.Coerce (coerce)
-import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
-import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
+import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eNOTCONN)
+import Foreign.C.Error (eADDRINUSE)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
-import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Socket.Datagram.Unix.Connected (UnixAddress(..))
 import Socket.Error (die)
-import Socket.Stream (ConnectException(..),SocketException(..),AcceptException(..))
-import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
+import Socket.Stream (SocketException(..),AcceptException(..))
+import Socket.Stream (CloseException(..))
 import Socket.Stream (Connection(..))
 import System.Posix.Types (Fd(Fd))
 import Socket (Interruptibility(..))
@@ -42,8 +42,6 @@ import qualified Socket.EventManager as EM
 import qualified Posix.Socket as S
 import qualified Linux.Socket as L
 import qualified Data.Primitive as PM
-import qualified Linux.Systemd as L
-import qualified Socket as SCK
 
 -- | A socket that listens for incomming connections.
 newtype Listener = Listener Fd
@@ -67,7 +65,7 @@ listen (UnixAddress path) = do
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
     S.defaultProtocol
   case e1 of
-    Left err -> handleSocketListenException SCK.functionWithListener err
+    Left err -> handleSocketListenException err
     Right fd -> do
       let sockAddr = id
             $ S.encodeSocketAddressUnix
@@ -111,8 +109,8 @@ describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show 
 -- These are the exceptions that can happen as a result
 -- of calling @socket@ with the intent of using the socket
 -- to listen for inbound connections.
-handleSocketListenException :: String -> Errno -> IO (Either SocketException a)
-handleSocketListenException func e@(Errno n)
+handleSocketListenException :: Errno -> IO (Either SocketException a)
+handleSocketListenException e@(Errno n)
   | e == eMFILE = pure (Left SocketFileDescriptorLimit)
   | e == eNFILE = pure (Left SocketFileDescriptorLimit)
   | otherwise = die
@@ -137,7 +135,7 @@ withListener !endpoint f = mask $ \restore -> do
 --   the socket cannot be closed.
 unlisten :: Listener -> IO ()
 unlisten (Listener fd) = S.uninterruptibleClose fd >>= \case
-  Left err -> die "Socket.Stream.Unix.unlisten"
+  Left _ -> die "Socket.Stream.Unix.unlisten"
   Right _ -> pure ()
 
 -- | Close a listener. This does not check to see whether or not
@@ -235,7 +233,7 @@ gracefulCloseB !fd = do
         die "Socket.Stream.Unix.gracefulCloseB"
     Right sz -> if sz == 0
       then S.uninterruptibleClose fd >>= \case
-        Left err -> die "Socket.Stream.Unix.gracefulCloseB"
+        Left _ -> die "Socket.Stream.Unix.gracefulCloseB"
         Right _ -> pure (Right ())
       else do
         _ <- S.uninterruptibleClose fd
