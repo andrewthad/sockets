@@ -8,10 +8,17 @@ module Socket.Stream.Unix
     Listener(..)
   , Connection(..)
   , UnixAddress(..)
-  , SystemdException(..)
     -- * Bracketed
   , withListener
   , withAccepted
+    -- * Exceptions
+  , SendException(..)
+  , ReceiveException(..)
+  , ConnectException(..)
+  , SocketException(..)
+  , AcceptException(..)
+  , CloseException(..)
+  , SystemdException(..)
     -- * Unbracketed
     -- $unbracketed
   , listen
@@ -30,9 +37,9 @@ import Foreign.C.Error (eADDRINUSE)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Socket.Datagram.Unix.Connected (UnixAddress(..))
 import Socket.Error (die)
-import Socket.Stream (SocketException(..),AcceptException(..))
-import Socket.Stream (CloseException(..))
+import Socket.Stream (SocketException(..),AcceptException(..),ConnectException(..))
 import Socket.Stream (Connection(..))
+import Socket.Stream (SendException(..),ReceiveException(..),CloseException(..))
 import System.Posix.Types (Fd(Fd))
 import Socket (Interruptibility(..))
 import Socket.Systemd (SystemdException(..),systemdListenerInternal)
