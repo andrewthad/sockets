@@ -21,6 +21,7 @@ module Socket.Stream.IPv4
     -- * Bracketed
     -- $brackeded
   , withListener
+  , withListenerReuse
   , withAccepted
   , withConnection
   , forkAccepted
@@ -41,6 +42,7 @@ module Socket.Stream.IPv4
     -- * Unbracketed
     -- $unbracketed
   , listen
+  , listenReuse
   , unlisten
   , unlisten_
   , connect
@@ -58,10 +60,9 @@ module Socket.Stream.IPv4
 
 import Control.Concurrent (ThreadId)
 import Control.Concurrent (forkIO, forkIOWithUnmask)
-import Control.Exception (Exception, mask, mask_, onException, throwIO)
+import Control.Exception (mask, mask_, onException, throwIO)
 import Control.Monad.STM (atomically)
 import Control.Concurrent.STM (TVar,modifyTVar')
-import Data.Bits ((.&.))
 import Data.Coerce (coerce)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..), eAGAIN, eINPROGRESS, eWOULDBLOCK, eNOTCONN)
@@ -69,6 +70,7 @@ import Foreign.C.Error (eADDRINUSE,eHOSTUNREACH)
 import Foreign.C.Error (eNFILE,eMFILE,eACCES,ePERM,eCONNABORTED)
 import Foreign.C.Error (eTIMEDOUT,eADDRNOTAVAIL,eNETUNREACH,eCONNREFUSED)
 import Foreign.C.Types (CInt)
+import GHC.Exts (Int#)
 import Net.Types (IPv4(..))
 import Socket (Interruptibility(..))
 import Socket (SocketUnrecoverableException(..),Family(Internet),Version(V4))
@@ -86,8 +88,6 @@ import qualified Control.Concurrent.STM as STM
 import qualified Data.Primitive as PM
 import qualified Foreign.C.Error.Describe as D
 import qualified Linux.Socket as L
-import qualified Linux.Systemd as L
-import qualified Posix.File as F
 import qualified Posix.Socket as S
 import qualified Socket as SCK
 import qualified Socket.EventManager as EM
@@ -109,7 +109,15 @@ newtype Listener = Listener Fd
 -- 'withListener' unless you are writing an integration with a
 -- resource-management library.
 listen :: Peer -> IO (Either SocketException (Listener, Word16))
-listen endpoint@Peer{port = specifiedPort} = do
+listen !peer = listenInternal 0# peer
+
+-- | Variant of 'listen' that sets @SO_REUSEADDR@ on the socket before
+-- binding.
+listenReuse :: Peer -> IO (Either SocketException (Listener, Word16))
+listenReuse !peer = listenInternal 1# peer
+
+listenInternal :: Int# -> Peer -> IO (Either SocketException (Listener, Word16))
+listenInternal reuse endpoint@Peer{port = specifiedPort} = do
   debug ("listen: opening listen " ++ describeEndpoint endpoint)
   e1 <- S.uninterruptibleSocket S.Internet
     (L.applySocketFlags (L.closeOnExec <> L.nonblocking) S.stream)
@@ -118,6 +126,13 @@ listen endpoint@Peer{port = specifiedPort} = do
   case e1 of
     Left err -> handleSocketListenException SCK.functionWithListener err
     Right fd -> do
+      case reuse of
+        0# -> pure ()
+        _ -> do
+          r <- S.uninterruptibleSetSocketOptionInt fd S.levelSocket S.reuseAddress 1
+          case r of
+            Left _ -> die "listenInternal: setsockopt SO_REUSEADDR failed"
+            Right (_ :: ()) -> pure ()
       -- TODO: shave off an allocation by building the sockaddr in C.
       e2 <- S.uninterruptibleBind fd
         (S.encodeSocketAddressInternet (endpointToSocketAddressInternet endpoint))
@@ -193,6 +208,21 @@ withListener ::
   -> (Listener -> Word16 -> IO a)
   -> IO (Either SocketException a)
 withListener !endpoint f = mask $ \restore -> do
+  listen endpoint >>= \case
+    Left err -> pure (Left err)
+    Right (sck, actualPort) -> do
+      a <- onException
+        (restore (f sck actualPort))
+        (unlisten_ sck)
+      unlisten sck
+      pure (Right a)
+
+-- | Variant of 'withListener' that sets @SO_REUSEADDR@ before binding.
+withListenerReuse ::
+     Peer
+  -> (Listener -> Word16 -> IO a)
+  -> IO (Either SocketException a)
+withListenerReuse !endpoint f = mask $ \restore -> do
   listen endpoint >>= \case
     Left err -> pure (Left err)
     Right (sck, actualPort) -> do

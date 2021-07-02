@@ -19,6 +19,8 @@ module Socket.Stream.Unix
   , AcceptException(..)
   , CloseException(..)
   , SystemdException(..)
+    -- * Bracketed
+  , interruptibleForkAcceptedUnmasked
     -- * Unbracketed
     -- $unbracketed
   , listen
@@ -30,7 +32,9 @@ module Socket.Stream.Unix
   , systemdListener
   ) where
 
-import Control.Exception (mask, onException)
+import Control.Concurrent (ThreadId,forkIOWithUnmask)
+import Control.Concurrent.STM (TVar,modifyTVar',atomically)
+import Control.Exception (mask, mask_, onException)
 import Data.Coerce (coerce)
 import Foreign.C.Error (Errno(..), eAGAIN, eWOULDBLOCK, eNOTCONN)
 import Foreign.C.Error (eADDRINUSE)
@@ -284,6 +288,62 @@ withAccepted !lstn consumeException cb = do
   case r of
     Left e -> pure (Left e)
     Right (e,a) -> fmap Right (consumeException e a)
+
+-- | Accept a connection on the listener and run the supplied callback in
+-- a new thread. The masking state is set to @Unmasked@ when running the
+-- callback. Typically, @a@ is instantiated to @()@.
+interruptibleForkAcceptedUnmasked ::
+     TVar Int
+     -- ^ Connection counter. Incremented when connection
+     --   is accepted. Decremented after connection is closed.
+  -> TVar Bool
+     -- ^ Interrupted. If this becomes 'True' give up and return
+     --   @'Left' 'AcceptInterrupted'@.
+  -> Listener
+     -- ^ Connection listener
+  -> (Either CloseException () -> a -> IO ())
+     -- ^ Callback to handle an ungraceful close. This must not
+     --   throw an exception.
+  -> (Connection -> IO a)
+     -- ^ Callback to consume connection. Must not return the connection.
+  -> IO (Either (AcceptException 'Interruptible) ThreadId)
+interruptibleForkAcceptedUnmasked !counter !abandon !lstn consumeException cb =
+  mask_ $ interruptibleAcceptCounting counter abandon lstn >>= \case
+    Left e -> pure (Left e)
+    Right conn -> fmap Right $ forkIOWithUnmask $ \unmask -> do
+      a <- onException
+        (unmask (cb conn))
+        (disconnect_ conn *> atomically (modifyTVar' counter (subtract 1)))
+      e <- disconnect conn
+      r <- unmask (consumeException e a)
+      atomically (modifyTVar' counter (subtract 1))
+      pure r
+
+-- Only used internally
+interruptibleAcceptCounting :: 
+     TVar Int
+  -> TVar Bool
+  -> Listener
+  -> IO (Either (AcceptException 'Interruptible) Connection)
+interruptibleAcceptCounting !counter !abandon (Listener !fd) = do
+  -- TODO: pull these out of the loop
+  let !mngr = EM.manager
+  tv <- EM.reader mngr fd
+  token <- EM.interruptibleWaitCounting counter abandon tv
+  if EM.isInterrupt token
+    then pure (Left AcceptInterrupted)
+    else waitlessAccept fd >>= \case
+      Left merr -> case merr of
+        Nothing -> do
+          EM.unready token tv
+          -- Decrement the connection counter if the notification
+          -- from epoll was a false alarm.
+          atomically (modifyTVar' counter (subtract 1))
+          interruptibleAcceptCounting counter abandon (Listener fd)
+        Just err -> pure (Left err)
+      Right r@(Connection conn) -> do
+        EM.register mngr conn
+        pure (Right r)
 
 -- | Retrieve a listener that systemd has passed to the process. This
 -- may only be called once. There is no bracketed variant

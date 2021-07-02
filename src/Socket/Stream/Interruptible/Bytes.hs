@@ -6,6 +6,7 @@ module Socket.Stream.Interruptible.Bytes
   ( send
   , receiveExactly
   , receiveOnce
+  , receiveOncePrepended
   , receiveBetween
   ) where
 
@@ -16,6 +17,7 @@ import Socket.Stream (Connection,ReceiveException,SendException)
 import Socket (Interruptibility(Interruptible))
 
 import qualified Data.Primitive as PM
+import qualified Data.Bytes as Bytes
 import qualified Socket.Stream.Interruptible.Bytes.Send as Send
 import qualified Socket.Stream.Interruptible.MutableBytes.Receive as Receive
 
@@ -64,6 +66,28 @@ receiveOnce !tv !conn !n = do
     Left err -> pure (Left err)
     Right sz -> do
       marr1 <- PM.resizeMutableByteArray marr0 sz
+      !arr <- PM.unsafeFreezeByteArray marr1
+      pure $! Right $! arr
+
+-- | Variant of 'receiveOnce' that returns prepends the received bytes
+-- with a prefix. This can be used to attach feed leftovers back in when
+-- processing line-oriented protocols.
+receiveOncePrepended ::
+     TVar Bool 
+     -- ^ Interrupt. On 'True', give up and return @'Left' 'ReceiveInterrupted'@.
+  -> Connection -- ^ Connection
+  -> Bytes -- ^ Prefix to prepend to the received bytes
+  -> Int -- ^ Maximum number of bytes to receive
+  -> IO (Either (ReceiveException 'Interruptible) ByteArray)
+{-# inline receiveOncePrepended #-}
+receiveOncePrepended !tv !conn !prefix !n = do
+  let !ix0 = Bytes.length prefix
+  !marr0 <- PM.newByteArray (n + ix0)
+  Bytes.unsafeCopy marr0 0 prefix
+  Receive.receiveOnce tv conn (MutableBytes marr0 ix0 n) >>= \case
+    Left err -> pure (Left err)
+    Right sz -> do
+      marr1 <- PM.resizeMutableByteArray marr0 (sz + ix0)
       !arr <- PM.unsafeFreezeByteArray marr1
       pure $! Right $! arr
 
