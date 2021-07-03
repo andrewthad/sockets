@@ -223,7 +223,7 @@ withListenerReuse ::
   -> (Listener -> Word16 -> IO a)
   -> IO (Either SocketException a)
 withListenerReuse !endpoint f = mask $ \restore -> do
-  listen endpoint >>= \case
+  listenReuse endpoint >>= \case
     Left err -> pure (Left err)
     Right (sck, actualPort) -> do
       a <- onException
