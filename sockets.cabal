@@ -81,7 +81,7 @@ flag example
 library sockets-internal
   build-depends:
     , base >= 4.11.1.0 && <5
-    , bytestring >=0.10 && <0.11
+    , bytestring >=0.10 && <0.12
     , ip >= 1.4.1
     , posix-api >=0.3.5 && <0.4
     , primitive-offset >= 0.2 && <0.3
@@ -529,7 +529,7 @@ library
   build-depends:
     , base >= 4.11.1.0 && <5
     , byteslice >=0.1.1 && <0.3
-    , bytestring >=0.10 && <0.11
+    , bytestring >=0.10 && <0.12
     , error-codes >=0.1.0.1 && <0.2
     , ip >=1.4.1
     , posix-api >=0.3.4.1 && <0.4

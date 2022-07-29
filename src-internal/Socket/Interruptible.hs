@@ -1,3 +1,4 @@
+{-# language CPP #-}
 {-# language DataKinds #-}
 
 module Socket.Interruptible
@@ -16,13 +17,24 @@ module Socket.Interruptible
 import Socket (Interruptibility(Interruptible))
 import Socket.EventManager (Token)
 import Control.Concurrent.STM (TVar)
-import GHC.Exts (RuntimeRep(LiftedRep))
 import qualified Socket.EventManager as EM
 import qualified Socket.Stream as Stream
 import qualified Socket.Datagram as Datagram
 import qualified Socket.SequencedPacket as SequencedPacket
 
-type InterruptRep = 'LiftedRep
+#if MIN_VERSION_base(4,16,0)
+import GHC.Exts (RuntimeRep(BoxedRep),Levity(Lifted))
+#else
+import GHC.Exts (RuntimeRep(LiftedRep))
+#endif
+
+type InterruptRep = 
+#if MIN_VERSION_base(4,16,0)
+  'BoxedRep 'Lifted
+#else
+  'LiftedRep
+#endif
+
 type Interrupt = TVar Bool
 type Intr = 'Interruptible
 
