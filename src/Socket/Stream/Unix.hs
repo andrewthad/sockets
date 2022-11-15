@@ -236,7 +236,9 @@ gracefulCloseB !fd = do
   -- bytes get eaten? The receive buffer is about to get axed anyway.
   S.uninterruptibleReceiveMutableByteArray fd buf 0 1 S.peek >>= \case
     Left err1 -> if err1 == eWOULDBLOCK || err1 == eAGAIN || err1 == eNOTCONN
-      then pure (Right ())
+      then do
+        _ <- S.uninterruptibleClose fd
+        pure (Right ())
       else do
         _ <- S.uninterruptibleClose fd
         -- We treat all @recv@ errors except for the nonblocking
