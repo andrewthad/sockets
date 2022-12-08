@@ -1,5 +1,10 @@
 # Revision history for stream-sockets
 
+## 0.6.1.0
+
+* Correct implementation of withListenerReuse
+* Add interruptibleForkAcceptedUnmasked for UDS. Add `SO_REUSEADDR` inet functions.
+
 ## 0.6.0.0
 
 * Give slab types a phantom type argument that indicates whether

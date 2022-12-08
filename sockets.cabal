@@ -1,6 +1,6 @@
-cabal-version: 2.2
+cabal-version: 3.0
 name: sockets
-version: 0.6.0.0
+version: 0.6.1.0
 synopsis: High-level network sockets
 description:
   This library provides a high-level abstraction for network sockets. It uses
@@ -83,7 +83,7 @@ library sockets-internal
     , base >= 4.11.1.0 && <5
     , bytestring >=0.10 && <0.12
     , ip >= 1.4.1
-    , posix-api >=0.3.5 && <0.4
+    , posix-api >=0.4 && <0.5
     , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2
     , primitive-addr >= 0.1 && <0.2
@@ -132,7 +132,7 @@ library sockets-internal
     hs-source-dirs: src-noerr
   hs-source-dirs: src-internal
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-interrupt
   build-depends:
@@ -143,20 +143,20 @@ library sockets-interrupt
   signatures: Socket.Interrupt
   hs-source-dirs: src-interrupt
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-buffer
   build-depends: base >= 4.11.1.0 && <5
   signatures: Socket.Buffer
   hs-source-dirs: src-buffer
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-datagram-send
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
@@ -167,14 +167,14 @@ library sockets-datagram-send
     Datagram.Send
   hs-source-dirs: src-datagram-send
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-datagram-receive
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , primitive-offset >= 0.2 && <0.3
     , sockets-internal
     , sockets-buffer
@@ -185,7 +185,7 @@ library sockets-datagram-receive
     Datagram.Receive
   hs-source-dirs: src-datagram-receive
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 -- This is only used as a shim for when the platform does not
 -- support recvmmsg. It lets us share code for the interruptible
@@ -195,7 +195,7 @@ library sockets-datagram-receive-many
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
     , stm >= 2.4
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , primitive-unlifted >= 0.1 && <0.2
     , byteslice >= 0.1.1
     , sockets-datagram-receive
@@ -213,13 +213,13 @@ library sockets-datagram-receive-many
       requires
       (Socket.Buffer as Socket.MutableBytes)
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-stream-send
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
@@ -231,13 +231,13 @@ library sockets-stream-send
     Stream.Send
   hs-source-dirs: src-stream-send
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-stream-receive
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , stm >= 2.4
     , sockets-internal
     , sockets-buffer
@@ -249,13 +249,13 @@ library sockets-stream-receive
     Stream.Receive
   hs-source-dirs: src-stream-receive
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library sockets-stream-send-two
   build-depends:
     , base >= 4.11.1.0 && <5
     , error-codes >= 0.1.0.1 && < 0.2
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , stm >= 2.4
     , sockets-internal
     , sockets-interrupt
@@ -275,7 +275,7 @@ library sockets-stream-send-two
        Stream.Send as Stream.Send.B)
   hs-source-dirs: src-stream-send-two
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 -- Here, we partially apply the indefinite packages for
 -- stream send and stream receive. The avoids duplication
@@ -296,7 +296,7 @@ library sockets-stream-bidirectional
       sockets-stream-send (Stream.Send.Indefinite)
     , sockets-stream-receive (Stream.Receive.Indefinite,SequencedPacket.Receive.Indefinite)
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 library
   exposed-modules:
@@ -532,7 +532,7 @@ library
     , bytestring >=0.10 && <0.12
     , error-codes >=0.1.0.1 && <0.2
     , ip >=1.4.1
-    , posix-api >=0.3.4.1 && <0.4
+    , posix-api >=0.4 && <0.5
     , primitive-addr >= 0.1 && <0.2
     , primitive-offset >= 0.2 && <0.3
     , primitive-unlifted >= 0.1 && <0.2
@@ -555,7 +555,7 @@ library
   else
     hs-source-dirs: src-no-mmsg
   default-language: Haskell2010
-  ghc-options: -O2 -Wall -j1
+  ghc-options: -O2 -Wall
 
 test-suite test
   type: exitcode-stdio-1.0
@@ -577,7 +577,7 @@ test-suite test
     build-depends: primitive-checked >= 0.7 && <0.8
   else
     build-depends: primitive >= 0.7 && <0.8
-  ghc-options: -Wall -O2 -threaded -j1
+  ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
 
 benchmark macro
@@ -592,7 +592,7 @@ benchmark macro
     build-depends: primitive-checked >= 0.7 && <0.8
   else
     build-depends: primitive >= 0.7 && <0.8
-  ghc-options: -Wall -O2 -threaded -rtsopts -j1
+  ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
   main-is: Macro.hs
@@ -609,7 +609,7 @@ benchmark http
     build-depends: primitive-checked >= 0.7 && <0.8
   else
     build-depends: primitive >= 0.7 && <0.8
-  ghc-options: -Wall -O2 -threaded -rtsopts -j1
+  ghc-options: -Wall -O2 -threaded -rtsopts
   default-language: Haskell2010
   hs-source-dirs: bench
   main-is: Http.hs
@@ -631,5 +631,5 @@ executable sockets-example
     buildable: False
   hs-source-dirs: example
   main-is: Main.hs
-  ghc-options: -Wall -O2 -threaded -j1
+  ghc-options: -Wall -O2 -threaded
   default-language: Haskell2010
