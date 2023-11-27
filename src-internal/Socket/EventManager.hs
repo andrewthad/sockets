@@ -37,7 +37,7 @@ import Control.Monad.STM (atomically)
 import Data.Bits (countLeadingZeros,finiteBitSize,unsafeShiftL,(.|.),(.&.))
 import Data.Bits (unsafeShiftR)
 import Data.Primitive.Unlifted.Array (MutableUnliftedArray(..))
-import Data.Primitive (MutableByteArray(..),MutablePrimArray(..))
+import Data.Primitive (MutableByteArray(..),MutablePrimArray(..),SmallMutableArray(..))
 import Data.Primitive (Prim)
 import Data.Word (Word64,Word32)
 import Foreign.C.Error (Errno(..),eINTR)
@@ -154,7 +154,7 @@ register mngr@Manager{epoll} !fd = do
 -- Precondition: A previous call to register has been made.
 -- unregister
 
-type MUArray = MutableUnliftedArray RealWorld
+type MUArray a = SmallMutableArray RealWorld a
 
 data Manager = Manager
   { variables :: !(MUArray (MUArray (TVar Token)))
@@ -171,9 +171,9 @@ manager :: Manager
 manager = unsafePerformIO $ do
   when (not rtsSupportsBoundThreads) $ do
     fail $ "Socket.Event.manager: threaded runtime required"
-  !novars <- PM.unsafeNewUnliftedArray 1
+  !novars <- unsafeNewMUArray 1
   writeTVarArray novars 0 =<< STM.newTVarIO (Token 0)
-  !variables <- PM.unsafeNewUnliftedArray 32
+  !variables <- unsafeNewMUArray 32
   let goX !ix = if ix >= 0
         then do
           writeMutableUnliftedArrayArray variables ix novars
@@ -231,7 +231,7 @@ lookupBoth !fd !arr = do
 lookupGeneric ::
      Int -- Read: 0, Write: 1
   -> Int -- File descriptor
-  -> MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld (TVar Token))
+  -> MUArray (MUArray (TVar Token))
   -> IO (TVar Token)
 lookupGeneric !rw !fd !arr = do
   let (ixTier1,ixTier2) = decompose fd
@@ -245,12 +245,12 @@ constructivelyLookupTier1 ::
 constructivelyLookupTier1 !fd Manager{variables,novars} = do
   let (ixTier1,ixTier2) = decompose fd
   varsTier2 <- readMutableUnliftedArrayArray variables ixTier1
-  if PM.sameMutableUnliftedArray varsTier2 novars
+  if sameMUArray varsTier2 novars
     then do
       -- We want 2 * 2^N tvars because there is a separate read and
       -- write tvar for every file descriptor.
       let !len = exp2succ ixTier1
-      varsAttempt <- PM.unsafeNewUnliftedArray len
+      varsAttempt <- unsafeNewMUArray len
       let goVars !ix = if ix > (-1)
             then do
               writeTVarArray varsAttempt ix
@@ -270,7 +270,7 @@ constructivelyLookupTier1 !fd Manager{variables,novars} = do
             0 -> STM.writeTVar syncVar (Token 1)
             _ -> STM.retry
         varsTier2' <- readMutableUnliftedArrayArray variables ixTier1
-        when (PM.sameMutableUnliftedArray varsTier2' novars) $ do
+        when (sameMUArray varsTier2' novars) $ do
           writeMutableUnliftedArrayArray variables ixTier1 varsAttempt
         STM.atomically (STM.writeTVar syncVar (Token 0))
       -- We ignore the success of casUnliftedArray. It does not actually
@@ -674,39 +674,42 @@ newPinnedPrimArray (I# n#)
   = PM.primitive (\s# -> case Exts.newPinnedByteArray# (n# *# PM.sizeOf# (undefined :: a)) s# of
       (# s'#, arr# #) -> (# s'#, MutablePrimArray arr# #))
 
--- This can be unsound if the result is passed to the FFI. Fortunately,
--- we do not do that with the result.
+sameMUArray :: MUArray a -> MUArray a -> Bool
+sameMUArray (SmallMutableArray x) (SmallMutableArray y) = isTrue# (Exts.sameSmallMutableArray# x y)
+
+unsafeNewMUArray :: Int -> IO (MUArray a)
+unsafeNewMUArray !n = PM.newSmallArray n implementationMistake
+
+implementationMistake :: a
+{-# noinline implementationMistake #-}
+implementationMistake = errorWithoutStackTrace "Socket.EventManager: implementation mistake"
+
 readTVarArray :: forall a.
-     MutableUnliftedArray RealWorld (TVar a) -- ^ source
+     MUArray (TVar a) -- ^ source
   -> Int -- ^ index
   -> IO (TVar a)
-readTVarArray (MutableUnliftedArray maa#) (I# i#)                       
-  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of                
-      (# s', aa# #) -> (# s', TVar ((unsafeCoerce# :: ArrayArray# -> TVar# RealWorld a) aa#) #)                       
+readTVarArray = PM.readSmallArray
+
 readMutableUnliftedArrayArray                                                           
-  :: MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ source
+  :: MUArray (MUArray a) -- ^ source
   -> Int -- ^ index
-  -> IO (MutableUnliftedArray RealWorld a)
-readMutableUnliftedArrayArray (MutableUnliftedArray maa#) (I# i#)                       
-  = PM.primitive $ \s -> case Exts.readArrayArrayArray# maa# i# s of                
-      (# s', aa# #) -> (# s', MutableUnliftedArray ((unsafeCoerce# :: ArrayArray# -> MutableArrayArray# RealWorld) aa#) #)                       
+  -> IO (MUArray a)
+readMutableUnliftedArrayArray = PM.readSmallArray
 
 -- See readTVarArray
 writeTVarArray :: forall a.
-     MutableUnliftedArray RealWorld (TVar a) -- ^ destination
+     MUArray (TVar a) -- ^ destination
   -> Int -- ^ index
   -> TVar a -- ^ value
   -> IO ()
-writeTVarArray (PM.MutableUnliftedArray maa#) (I# i#) (TVar a)
-  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# ((unsafeCoerce# :: TVar# RealWorld a -> ArrayArray#) a))
+writeTVarArray !a !b !c = PM.writeSmallArray a b c
 
 writeMutableUnliftedArrayArray :: forall a.
-     MutableUnliftedArray RealWorld (MutableUnliftedArray RealWorld a) -- ^ source
+     MUArray (MUArray a) -- ^ source
   -> Int -- ^ index
-  -> MutableUnliftedArray RealWorld a -- ^ value
+  -> MUArray a -- ^ value
   -> IO ()
-writeMutableUnliftedArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (MutableUnliftedArray a)
-  = PM.primitive_ (Exts.writeArrayArrayArray# maa# i# ((unsafeCoerce# :: MutableArrayArray# RealWorld -> ArrayArray#) a))
+writeMutableUnliftedArrayArray !a !b !c = PM.writeSmallArray a b c
 
 -- [Notes on registration]
 -- This interface requires every call to @register@ to be paired with

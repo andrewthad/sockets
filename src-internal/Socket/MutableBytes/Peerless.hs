@@ -38,7 +38,7 @@ receiveFromOnce ::
 {-# inline receiveFromOnce #-}
 receiveFromOnce fd (MutableBytes arr off len) flags !_ =
   S.uninterruptibleReceiveFromMutableByteArray_
-    fd arr (intToCInt off) (intToCSize len) flags
+    fd arr off (intToCSize len) flags
    
 intToCInt :: Int -> CInt
 {-# inline intToCInt #-}

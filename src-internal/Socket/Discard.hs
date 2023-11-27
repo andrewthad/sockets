@@ -154,21 +154,17 @@ writeMutableByteArrayArray
   -> Int -- ^ index
   -> MutableByteArray RealWorld -- ^ value
   -> IO ()
-writeMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (PM.MutableByteArray a)
-  = primitive_ (Exts.writeMutableByteArrayArray# maa# i# a)
+writeMutableByteArrayArray = PM.writeUnliftedArray
 
 writeByteArrayArray
   :: MutableUnliftedArray RealWorld ByteArray -- ^ destination
   -> Int -- ^ index
   -> ByteArray -- ^ value
   -> IO ()
-writeByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#) (PM.ByteArray a)
-  = primitive_ (Exts.writeByteArrayArray# maa# i# a)
+writeByteArrayArray = PM.writeUnliftedArray
 
 readMutableByteArrayArray
   :: MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ source
   -> Int -- ^ index
   -> IO (MutableByteArray RealWorld)
-readMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#)
-  = primitive $ \s -> case Exts.readMutableByteArrayArray# maa# i# s of
-      (# s', aa# #) -> (# s', PM.MutableByteArray aa# #)
+readMutableByteArrayArray = PM.readUnliftedArray

@@ -33,12 +33,12 @@ length (MutableBytes _ _ len) = len
 sendOnce :: Fd -> MutableBytes RealWorld -> IO (Either Errno CSize)
 {-# inline sendOnce #-}
 sendOnce fd (MutableBytes arr off len) =
-  uninterruptibleSendMutableByteArray fd arr (intToCInt off) (intToCSize len) noSignal
+  uninterruptibleSendMutableByteArray fd arr off (intToCSize len) noSignal
 
 receiveOnce :: Fd -> MutableBytes RealWorld -> IO (Either Errno CSize)
 {-# inline receiveOnce #-}
 receiveOnce fd (MutableBytes arr off len) =
-  uninterruptibleReceiveMutableByteArray fd arr (intToCInt off) (intToCSize len) mempty
+  uninterruptibleReceiveMutableByteArray fd arr off (intToCSize len) mempty
 
 intToCInt :: Int -> CInt
 {-# inline intToCInt #-}

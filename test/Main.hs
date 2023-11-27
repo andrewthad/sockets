@@ -99,8 +99,6 @@ tests = testGroup "socket"
         , testCase "12MB" (testStreamF (4 * 1024))
         , testCase "48MB" (testStreamF (16 * 1024))
         ]
-      , testCase "G" testStreamG
-      , testCase "H" testStreamH
       ]
     ]
   ]
@@ -604,68 +602,6 @@ testStreamE = do
       y <- unhandled $ UMB.receiveBetween conn (MutableBytes marr x 150) 100
       unhandled $ UMB.receiveExactly conn (MutableBytes marr (x + y) (256 - (x + y)))
       PM.unsafeFreezeByteArray marr
-
-testStreamG :: Assertion
-testStreamG = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  ((),received) <- concurrently (sender m) (receiver m)
-  received @=? (mconcat [messageA, messageB, messageC, messageD])
-  where
-  messageA = E.fromList [0..17] :: ByteArray
-  messageB = E.fromList [18..92] :: ByteArray
-  messageC = E.fromList [93..182] :: ByteArray
-  messageD = E.fromList [183..255] :: ByteArray
-  sender :: PM.MVar RealWorld Word16 -> IO ()
-  sender m = do
-    dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      let msgs = E.fromList [messageA,messageB,messageC,messageD]
-      unhandled $ UB.sendMany conn msgs
-  receiver :: PM.MVar RealWorld Word16 -> IO ByteArray
-  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
-    PM.putMVar m port
-    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
-      marr <- PM.newByteArray 256
-      x <- unhandled $ UMB.receiveBetween conn (MutableBytes marr 0 60) 20
-      y <- unhandled $ UMB.receiveBetween conn (MutableBytes marr x 150) 100
-      unhandled $ UMB.receiveExactly conn (MutableBytes marr (x + y) (256 - (x + y)))
-      PM.unsafeFreezeByteArray marr
-
--- The sender sends a large amount of traffic that may exceed
--- the size of the operating system's TCP send buffer, currently
--- 32MB. This uses sendmsg.
-testStreamH :: Assertion
-testStreamH = do
-  (m :: PM.MVar RealWorld Word16) <- PM.newEmptyMVar
-  ((),()) <- concurrently (sender m) (receiver m)
-  pure ()
-  where
-  recvChunkSize = 32 * 1024
-  message = E.fromList (replicate (1024 * 256) magicByte) :: ByteArray
-  messages = E.fromList (replicate 128 message) :: UnliftedArray ByteArray
-  sender :: PM.MVar RealWorld Word16 -> IO ()
-  sender m = do
-    dstPort <- PM.takeMVar m
-    unhandled $ SI.withConnection (DIU.Peer IPv4.loopback dstPort) unhandledClose $ \conn -> do
-      unhandled $ UB.sendMany conn messages
-  receiver :: PM.MVar RealWorld Word16 -> IO ()
-  receiver m = unhandled $ SI.withListener (SI.Peer IPv4.loopback 0) $ \listener port -> do
-    PM.putMVar m port
-    unhandled $ SI.withAccepted listener unhandledClose $ \conn _ -> do
-      buffer <- PM.newByteArray recvChunkSize
-      let receiveLoop !remaining
-            | remaining > 0 = do
-                let recvSize = min remaining recvChunkSize
-                PM.setByteArray buffer 0 recvChunkSize (0 :: Word8)
-                bytesReceived <- unhandled
-                  (UMB.receiveOnce conn (MutableBytes buffer 0 recvSize))
-                verifyClientSendBytes buffer bytesReceived >>= \case
-                  True -> receiveLoop (remaining - bytesReceived)
-                  False -> throwIO MagicByteMismatch
-            | remaining == 0 = pure ()
-            | otherwise = throwIO NegativeByteCount
-      receiveLoop (32 * 1024 * 1024)
-      pure ()
 
 touchMutableByteArray :: MutableByteArray RealWorld -> IO ()
 touchMutableByteArray (MutableByteArray x) = touchMutableByteArray# x

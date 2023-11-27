@@ -27,7 +27,7 @@ type Buffer = MutableBytes RealWorld
 send :: Peer -> Fd -> Buffer -> IO (Either Errno CSize)
 send !dst !sock (MutableBytes arr off len) =
   S.uninterruptibleSendToInternetMutableByteArray sock arr
-    (intToCInt off)
+    off
     (intToCSize len)
     mempty
     (endpointToSocketAddressInternet dst)

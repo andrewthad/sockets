@@ -26,7 +26,7 @@ send !_ !sock (Bytes arr off len) =
   -- No need for MSG_NOSIGNAL since this is a datagram
   -- socket, not a stream socket.
   S.uninterruptibleSendByteArray sock arr
-    (intToCInt off)
+    off
     (intToCSize len)
     mempty
 

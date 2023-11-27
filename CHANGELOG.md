@@ -1,5 +1,15 @@
 # Revision history for stream-sockets
 
+## 0.7.0.0
+
+* Remove `sendMany`.
+* Make it possible to build this project with GHC 9.2 series. The previous
+  release had dropped support for everything below GHC 9.4.
+
+## 0.6.1.1
+
+* Work with primitive-unlifted-2.1.0.0.
+
 ## 0.6.1.0
 
 * Correct implementation of withListenerReuse

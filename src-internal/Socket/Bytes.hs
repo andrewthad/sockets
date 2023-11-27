@@ -37,5 +37,5 @@ intToCSize = fromIntegral
 sendOnce :: Fd -> Bytes -> IO (Either Errno CSize)
 {-# inline sendOnce #-}
 sendOnce fd (Bytes arr off len) =
-  uninterruptibleSendByteArray fd arr (intToCInt off) (intToCSize len) noSignal
+  uninterruptibleSendByteArray fd arr off (intToCSize len) noSignal
 

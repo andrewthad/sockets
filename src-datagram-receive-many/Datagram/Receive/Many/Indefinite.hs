@@ -109,6 +109,4 @@ readMutableByteArrayArray
   :: MutableUnliftedArray RealWorld (MutableByteArray RealWorld) -- ^ source
   -> Int -- ^ index
   -> IO (MutableByteArray RealWorld)
-readMutableByteArrayArray (PM.MutableUnliftedArray maa#) (I# i#)
-  = primitive $ \s -> case Exts.readMutableByteArrayArray# maa# i# s of
-      (# s', aa# #) -> (# s', PM.MutableByteArray aa# #)
+readMutableByteArrayArray = PM.readUnliftedArray

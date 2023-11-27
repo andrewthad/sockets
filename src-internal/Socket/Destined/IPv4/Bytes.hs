@@ -26,7 +26,7 @@ type Buffer = Bytes
 send :: Peer -> Fd -> Buffer -> IO (Either Errno CSize)
 send !dst !sock (Bytes arr off len) =
   S.uninterruptibleSendToInternetByteArray sock arr
-    (intToCInt off)
+    off
     (intToCSize len)
     mempty
     (endpointToSocketAddressInternet dst)
