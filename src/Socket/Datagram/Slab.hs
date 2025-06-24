@@ -1,3 +1,5 @@
+{-# language DuplicateRecordFields #-}
+
 module Socket.Datagram.Slab
   ( -- * Types
     D.PeerlessSlab(..)

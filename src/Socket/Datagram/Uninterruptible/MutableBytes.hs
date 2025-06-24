@@ -1,4 +1,5 @@
 {-# language BangPatterns #-}
+{-# language DuplicateRecordFields #-}
 {-# language LambdaCase #-}
 {-# language GADTSyntax #-}
 {-# language KindSignatures #-}

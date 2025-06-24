@@ -1,8 +1,9 @@
 {-# language BangPatterns #-}
-{-# language LambdaCase #-}
+{-# language DataKinds #-}
+{-# language DuplicateRecordFields #-}
 {-# language GADTSyntax #-}
 {-# language KindSignatures #-}
-{-# language DataKinds #-}
+{-# language LambdaCase #-}
 {-# language MagicHash #-}
 
 module Socket.Datagram.Uninterruptible.Addr
