@@ -92,16 +92,13 @@ describeErrorCode :: Errno -> String
 describeErrorCode err@(Errno e) = "error code " ++ D.string err ++ " (" ++ show e ++ ")"
 
 handleSocketException :: Errno -> IO (Either SocketException a)
-handleSocketException e
+handleSocketException e@(Errno n)
   | e == eMFILE = pure (Left SocketFileDescriptorLimit)
   | e == eNFILE = pure (Left SocketFileDescriptorLimit)
-  | otherwise = die
-      ("Socket.Datagram.IPv4.Undestined.socket: " ++ describeErrorCode e)
+  | otherwise = pure $! Left $! SocketErrorCode n
 
 handleBindException :: Errno -> IO (Either SocketException a)
-handleBindException !e
+handleBindException e@(Errno n)
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = pure (Left SocketAddressInUse)
-  | otherwise = die
-      ("Socket.Datagram.IPv4.Undestined.bind: " ++ describeErrorCode e)
-
+  | otherwise = pure $! Left $! SocketErrorCode n

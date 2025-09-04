@@ -124,8 +124,7 @@ handleSocketListenException :: Errno -> IO (Either SocketException a)
 handleSocketListenException e@(Errno n)
   | e == eMFILE = pure (Left SocketFileDescriptorLimit)
   | e == eNFILE = pure (Left SocketFileDescriptorLimit)
-  | otherwise = die
-      ("Socket.Stream.Unix.listen: " ++ D.string e ++ " (" ++ show n ++ ")")
+  | otherwise = pure $! Left $! SocketErrorCode n
 
 -- | Open a socket that is used to listen for inbound connections.
 withListener ::

@@ -132,6 +132,10 @@ data SocketException :: Type where
   --   This could be the per-process limit or the system limit.
   --   (@EMFILE@ and @ENFILE@)
   SocketFileDescriptorLimit :: SocketException
+  -- | Anything else. This library used to try to map each exception that
+  --   could occur to a data constructor. However, on Linux, it is possible
+  --   for @socket@ to fail with errors that are not listed in the man page.
+  SocketErrorCode :: !CInt -> SocketException
 
 deriving stock instance Show SocketException
 deriving anyclass instance Exception SocketException

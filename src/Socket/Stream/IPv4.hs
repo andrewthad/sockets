@@ -926,13 +926,12 @@ handleBindListenException ::
      Word16
   -> Errno
   -> IO (Either SocketException a)
-handleBindListenException !thePort !e
+handleBindListenException !thePort !e@(Errno code)
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
       then pure (Left SocketEphemeralPortsExhausted)
       else pure (Left SocketAddressInUse)
-  | otherwise = die
-      ("Socket.Stream.IPv4.bindListen: " ++ describeErrorCode e)
+  | otherwise = pure $! Left $! SocketErrorCode code
 
 -- These are the exceptions that can happen as a result
 -- of calling @accept@.
