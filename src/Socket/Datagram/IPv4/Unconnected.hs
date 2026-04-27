@@ -32,7 +32,7 @@ module Socket.Datagram.IPv4.Unconnected
 import Control.Exception (mask,onException)
 import Data.Word (Word16)
 import Foreign.C.Error (Errno(..),eACCES)
-import Foreign.C.Error (eNFILE,eMFILE,eADDRINUSE)
+import Foreign.C.Error (eNFILE,eMFILE,eADDRINUSE,eADDRNOTAVAIL)
 import Foreign.C.Types (CInt)
 import Net.Types (IPv4(..))
 import Socket (Connectedness(..),Family(..),Version(..))
@@ -161,10 +161,10 @@ handleSocketException e
       ("Socket.Datagram.IPv4.Undestined.socket: " ++ describeErrorCode e)
 
 handleBindException :: Word16 -> Errno -> IO (Either SocketException a)
-handleBindException !thePort !e
+handleBindException !thePort e@(Errno code)
   | e == eACCES = pure (Left SocketPermissionDenied)
   | e == eADDRINUSE = if thePort == 0
       then pure (Left SocketEphemeralPortsExhausted)
       else pure (Left SocketAddressInUse)
-  | otherwise = die
-      ("Socket.Datagram.IPv4.Undestined.bind: " ++ describeErrorCode e)
+  | e == eADDRNOTAVAIL = pure (Left SocketAddressNotAvailable)
+  | otherwise = pure $! Left $! SocketErrorCode code
