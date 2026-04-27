@@ -123,6 +123,9 @@ data SocketException :: Type where
   --   and no new socket may be bound to the address during this period.
   --   (@EADDRINUSE@ with specified port)
   SocketAddressInUse :: SocketException
+  -- | Cannot bind to the address because it is not available to be bound to.
+  --   address was recently bound to and closed. (@EADDRNOTAVAIL@)
+  SocketAddressNotAvailable :: SocketException
   -- | The port number was specified as zero, but upon attempting to
   --   bind to an ephemeral port, it was determined that all port numbers
   --   numbers in the ephemeral port range are currently in use.

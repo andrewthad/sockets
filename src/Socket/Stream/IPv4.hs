@@ -931,6 +931,7 @@ handleBindListenException !thePort !e@(Errno code)
   | e == eADDRINUSE = if thePort == 0
       then pure (Left SocketEphemeralPortsExhausted)
       else pure (Left SocketAddressInUse)
+  | e == eADDRNOTAVAIL = pure (Left SocketAddressNotAvailable)
   | otherwise = pure $! Left $! SocketErrorCode code
 
 -- These are the exceptions that can happen as a result
